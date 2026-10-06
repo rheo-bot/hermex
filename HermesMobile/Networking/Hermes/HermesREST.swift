@@ -55,9 +55,15 @@ import Foundation
 /// The Sessions list's page and read mark (#1046) are read at the same pin, checked against
 /// `scripts/local-hermes` and the shape of a read-only `GET /api/sessions` on a 0.21.5 host;
 /// `docs/agents/bots.md` § Sessions list on Hermes has the recipe.
+/// A session's transcript pages (#1047) are read at the same pin, checked against a compacted
+/// session on `scripts/local-hermes` and the shape of a read-only page from a 0.21.5 host:
+/// `{session_id, profile, messages, pagination: {limit, offset, order, returned}}`, each page
+/// oldest first, with no total, so a short page is the start.
 enum HermesREST: Equatable, Sendable {
     /// The most rows `GET /api/sessions` lists in one page.
     static let sessionPageSize = 100
+    /// The most display rows one transcript page (`sessionMessages` with an offset) carries.
+    static let transcriptPageSize = 100
 
     /// Public, so it reads the host before any credential is sent.
     case status
@@ -89,9 +95,11 @@ enum HermesREST: Equatable, Sendable {
     case restartDashboard
     /// Every agent plugin with its on-disk version.
     case pluginsHub
-    /// A stored session's latest rows under `profile`: a background task's `bg_<id>` side
-    /// session, whose last reply is its durable result (#1013).
-    case sessionMessages(key: String, profile: String)
+    /// A stored session's rows under `profile`. Without an offset, its latest 500: a background
+    /// task's `bg_<id>` side session, whose last reply is its durable result (#1013). With one,
+    /// a transcript page (#1047): `transcriptPageSize` display rows counted back from the newest,
+    /// compacted ones included, in chronological order.
+    case sessionMessages(key: String, profile: String, offset: Int? = nil)
     /// One page of `profile`'s sessions for the Sessions list (#1046): latest activity first,
     /// without archived, empty or machine-run rows, `sessionPageSize` at a time from `offset`.
     /// Each page also brings every pinned row it missed, archived ones included.
@@ -260,9 +268,23 @@ enum HermesREST: Equatable, Sendable {
         case .pushPairing: return Self.get(base.appendingPathComponent("api/plugins/hermex-push/pairing"))
         case .restartDashboard: return try Self.send("POST", base.appendingPathComponent("api/plugins/hermex-push/restart"), [:])
         case .pluginsHub: return Self.get(base.appendingPathComponent("api/dashboard/plugins/hub"))
-        case .sessionMessages(let key, let profile):
-            guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
-            return Self.get(try Self.url(base, "api/sessions/\(key)/messages", profile: profile))
+        case .sessionMessages(let key, let profile, let offset):
+            guard Self.isSegment(key), !profile.isEmpty, (offset ?? 0) >= 0,
+                  var parts = URLComponents(url: try Self.url(base, "api/sessions/\(key)/messages", profile: profile),
+                                            resolvingAgainstBaseURL: false)
+            else { throw BotFailure.invalidAddress }
+            // Both `order` and `limit`: a limit alone pages from the oldest row. Without
+            // `include_compacted` the transcript would end at the last compaction.
+            if let offset {
+                parts.queryItems = (parts.queryItems ?? []) + [
+                    URLQueryItem(name: "order", value: "latest"),
+                    URLQueryItem(name: "limit", value: String(Self.transcriptPageSize)),
+                    URLQueryItem(name: "offset", value: String(offset)),
+                    URLQueryItem(name: "include_compacted", value: "true")
+                ]
+            }
+            guard let url = parts.url else { throw BotFailure.invalidAddress }
+            return Self.get(url)
         case .sessionList(let profile, let offset):
             guard !profile.isEmpty, offset >= 0,
                   var parts = URLComponents(url: base.appendingPathComponent("api/sessions"), resolvingAgainstBaseURL: false)

@@ -104,12 +104,12 @@ import Foundation
         return profile
     }
 
-    func sessionMessages(_ key: String, profile: String) async throws -> [BotJSON]? {
+    func sessionMessages(_ key: String, profile: String, offset: Int?) async throws -> [BotJSON]? {
         guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
         let attempt = self.attempt
         let data: Data
         do {
-            data = try await http.data(.sessionMessages(key: key, profile: profile),
+            data = try await http.data(.sessionMessages(key: key, profile: profile, offset: offset),
                                        validateDispatch: { try self.checkOwner(attempt) })
         } catch BotFailure.rejected(404) {
             try checkOwner(attempt)

@@ -11,8 +11,13 @@ import SwiftData
     func hermesTurnDidStart(prompt: String?)
     /// `message.complete`'s reply text: kept when deltas already carried it, appended when not.
     func hermesTurnDidComplete(reply: String)
-    /// Replaces the transcript with a full snapshot's history and its in-flight turn.
+    /// Replaces the transcript with the settled history and the in-flight turn.
     func hermesReplaceTranscript(_ transcript: HermesChatTranscript)
+    /// Puts an older page of settled history in front (#1047). The rows on screen and the
+    /// running turn stay as they are.
+    func hermesPrependHistory(_ transcript: HermesChatTranscript)
+    /// A history read failed: the transcript keeps what it shows, and the chat says why (#1047).
+    func hermesHistoryDidFail(_ message: String)
     func hermesApplyUsage(_ usage: ContextWindowSnapshot)
     /// The model `session.info` reports: the Profile's default unless the host says otherwise.
     func hermesApplyModel(_ model: String)
@@ -41,11 +46,19 @@ struct HermesSessionChat: Hashable, Identifiable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-/// A Hermes session's transcript rebuilt from a full `session.resume`.
+/// A Hermes session's transcript: its settled history from REST pages (#1047), and the
+/// in-flight turn a `session.resume` reports.
 struct HermesChatTranscript: Equatable {
+    /// The settled rows, each with the host's `rowID`.
     var messages: [ChatMessage]
     var toolCallGroups: [ToolCallGroup]
     var reasoningGroups: [ReasoningGroup]
+    var compaction: HermesCompaction?
+    /// Earlier pages remain on the host.
+    var hasOlder = false
+    /// The in-flight turn's rows the host has not saved: its prompt, and the reply of a turn
+    /// that ended while away.
+    var live: [ChatMessage] = []
     /// The running turn's unsaved reply, which the next deltas continue.
     var streamingReply: ChatMessage?
     var title: String?
@@ -54,11 +67,13 @@ struct HermesChatTranscript: Equatable {
 /// Runs a Hermes session's turns in the main chat (#1010). It owns the session's
 /// `HermesConversation`, which attaches, replays and reconnects, and reduces the engine's
 /// ordered frames onto the chat's `ChatStreamCoordinatorDelegate`, so message building,
-/// pacing and run endings are the webui path's. Text is delta-driven; a full snapshot
-/// replaces the transcript only on the engine's rebuild signal (a gap, a reset replay, a
-/// new runtime). The engine drops repeated frames by `seq`, so appends never deduplicate
-/// by text. Each prompt, steer, redirect and stop is one `write`, never resent; a Send or
-/// Queue uploads its staged files first (#1012). The host's requests (approvals,
+/// pacing and run endings are the webui path's. Text is delta-driven. Settled history comes
+/// from REST transcript pages (#1047), 100 rows at a time, newest first: an attach's rebuild
+/// signal (a gap, a reset replay, a new runtime) re-reads the newest page and lays the
+/// snapshot's in-flight turn after it, and a turn the host saved in full re-reads it so its
+/// rows take their durable ids. The engine drops repeated frames by `seq`, so appends never
+/// deduplicate by text. Each prompt, steer, redirect and stop is one `write`, never resent; a
+/// Send or Queue uploads its staged files first (#1012). The host's requests (approvals,
 /// questions, sudo and secret prompts) are `requests` (#1011); the goal, `/btw` and
 /// `/background` are `sideTasks` (#1013); its model and Profile chips are `settings` (#1015);
 /// its host's slash commands are `slashCommands` (#1036).
@@ -121,6 +136,17 @@ struct HermesChatTranscript: Equatable {
     /// The host refused the saved sign-in: nothing reattaches on its own until the chat
     /// asks again, so the refused password is not sent again unasked (#884).
     @ObservationIgnored private var refusedSignIn = false
+    /// The settled history read so far (#1047).
+    @ObservationIgnored private var history = HermesTranscriptHistory()
+    /// Why the last newest-page read failed, until one succeeds.
+    @ObservationIgnored private var historyFailure: Error?
+    /// The running turn's rows as `message.complete`'s `persisted_turn` names them, when the
+    /// host saved all of them.
+    @ObservationIgnored private var savedTurn: SavedTurn?
+    @ObservationIgnored private var historyRefresh: Task<Void, Never>?
+    /// Sends between their call and the host's answer: a page must not replace the
+    /// transcript under a prompt the chat already shows.
+    @ObservationIgnored private var submitsInFlight = 0
     @ObservationIgnored private var draftKey: ChatDraftKey
     private let isNetworkAvailable: @MainActor () -> Bool
     /// The shared Live Activity manager this chat's turns drive (#1014); nil drives none.
@@ -206,6 +232,12 @@ struct HermesChatTranscript: Equatable {
         var duringUpload = false
     }
 
+    /// The rows the host saved for a turn, from `message.complete`'s `persisted_turn`.
+    struct SavedTurn: Equatable {
+        let promptRowID: Int?
+        let replyRowID: Int
+    }
+
     /// A staged file a Send or Queue uploads ahead of its prompt (#1012). Its local copy is
     /// read only then.
     struct OutgoingAttachment {
@@ -227,6 +259,8 @@ struct HermesChatTranscript: Equatable {
     /// resent: after a lost reply the next snapshot says what happened.
     func submit(_ text: String, mode: BotPromptMode, attachments: [OutgoingAttachment] = [],
                 beforePrompt: () async throws -> Void = {}) async throws -> BotPromptOutcome {
+        submitsInFlight += 1
+        defer { submitsInFlight -= 1 }
         await activate()
         guard engine.connectionState == .connected, let runtime = engine.runtime else {
             throw NotSent(underlying: BotFailure.transport)
@@ -403,6 +437,7 @@ struct HermesChatTranscript: Equatable {
         turnsStarted += 1
         latestRunEnding = nil; successfulResponseCompletion = nil
         pendingEnding = nil; awaitingStart = false; stopRequested = false
+        savedTurn = nil
         hostRunning = true
         turnStartedAt = startedAt
         activeRunStartedAt = Self.date(startedAt) ?? Date()
@@ -439,6 +474,10 @@ struct HermesChatTranscript: Equatable {
         delegate?.streamCoordinatorFlushPinnedLocalNoticesToTranscript()
         delegate?.streamCoordinatorDidFinishStream()
         delegate?.streamCoordinatorDidResetRecoveryState()
+        if let savedTurn {
+            self.savedTurn = nil
+            refreshHistory(after: savedTurn)
+        }
     }
 
     /// The host's start for the running turn, which can only move it earlier.
@@ -567,6 +606,11 @@ struct HermesChatTranscript: Equatable {
             delegate?.streamCoordinatorDidReceiveErrorMessage(message)
         }
         if let usage = Self.contextWindow(payload["usage"]) { delegate?.hermesApplyUsage(usage) }
+        // Only a receipt for the whole turn retires its streamed rows (`persisted_turn`, 0.21.4).
+        let receipt = payload["persisted_turn"]
+        if receipt["complete"].flag == true, let reply = receipt["final_assistant_row_id"].integer {
+            savedTurn = SavedTurn(promptRowID: receipt["user_row_id"].integer, replyRowID: reply)
+        }
         if ending == .cancelled {
             // A stop from any client discards the host's queued prompt and withdraws its
             // requests, so a receipt for this chat's queued prompt would never send.
@@ -577,8 +621,9 @@ struct HermesChatTranscript: Equatable {
         if !hostRunning { finish(ending) }
     }
 
-    /// Settles the turn against an attach's snapshot, then rebuilds the transcript from it
-    /// when frames were lost. Without a rebuild the replay already continued the turn.
+    /// Settles the turn against an attach's snapshot, then rebuilds the transcript from the
+    /// history and it when frames were lost. Without a rebuild the replay already continued
+    /// the turn.
     private func reconcile(with snapshot: BotJSON) {
         let running = snapshot["running"].flag ?? snapshot["info"]["running"].flag ?? false
         let startedAt = snapshot["turn_started_at"].number ?? snapshot["inflight"]["started_at"].number
@@ -602,42 +647,119 @@ struct HermesChatTranscript: Equatable {
         if engine.replayWasReset || needsRebuild { rebuild(from: snapshot, running: running) }
     }
 
-    /// The transcript from the snapshot's history plus its in-flight turn: the prompt until
-    /// the host saves it, and the reply so far, which the next deltas continue. Held deltas
-    /// that reply already holds are dropped when the engine releases them.
+    /// The transcript from the settled history plus the snapshot's in-flight turn: the prompt
+    /// until the host saves it, and the reply so far, which the next deltas continue. Held
+    /// deltas that reply already holds are dropped when the engine releases them.
     private func rebuild(from snapshot: BotJSON, running: Bool) {
         needsRebuild = false
-        guard let history = snapshot["messages"].list, snapshot["messages_omitted"].flag != true else { return }
         let root = engine.storedKey ?? ""
-        let projected = BotTranscriptProjection.project(history: history, root: root)
-        var messages = projected.messages.map(Self.displayed)
+        var transcript = historyTranscript()
         let inflight = snapshot["inflight"]
         let startedAt = inflight["started_at"].number ?? snapshot["turn_started_at"].number
         if let text = inflight["user"].text, !text.isEmpty {
             let prompt = Self.displayed(ChatMessage(role: "user", content: text, timestamp: startedAt, messageId: "\(root)/live-user"))
-            if !Self.holdsPrompt(prompt, in: messages, startedAt: startedAt) { messages.append(prompt) }
+            if !Self.holdsPrompt(prompt, in: transcript.messages, startedAt: startedAt) { transcript.live.append(prompt) }
         }
-        var reply: ChatMessage?
         if let text = inflight["assistant"].text, !text.isEmpty {
             let row = ChatMessage(role: "assistant", content: text, timestamp: nil, messageId: "\(root)/live-\(UUID().uuidString)")
-            if running { reply = row } else { messages.append(row) }
+            if running { transcript.streamingReply = row } else { transcript.live.append(row) }
             deltasInRebuild = Self.heldDeltas(heldFrames, after: engine.sequence, alreadyIn: text, following: replayedReply)
         }
-        let title = snapshot["info"]["title"].text.flatMap { $0.isEmpty ? nil : $0 }
-        delegate?.hermesReplaceTranscript(HermesChatTranscript(
-            messages: messages,
-            toolCallGroups: projected.activity.filter { !$0.toolCalls.isEmpty }.map {
-                ToolCallGroup(id: $0.id, anchorMessageID: $0.anchorMessageID, toolCalls: $0.toolCalls)
-            },
-            reasoningGroups: projected.activity.compactMap { activity in
-                activity.reasoning.map { ReasoningGroup(id: activity.id, anchorMessageID: activity.anchorMessageID, text: $0) }
-            },
-            streamingReply: reply,
-            title: title
-        ))
+        transcript.title = snapshot["info"]["title"].text.flatMap { $0.isEmpty ? nil : $0 }
+        delegate?.hermesReplaceTranscript(transcript)
     }
 
-    /// Reattaches so the next snapshot replaces the transcript: frames were lost mid-turn.
+    // MARK: History
+
+    /// The settled history as the chat shows it.
+    private func historyTranscript() -> HermesChatTranscript {
+        let projected = HermesTranscriptProjection.project(history.rows, root: engine.storedKey ?? "")
+        return HermesChatTranscript(messages: projected.messages.map(Self.displayed), toolCallGroups: projected.toolCallGroups,
+                                    reasoningGroups: projected.reasoningGroups, compaction: projected.compaction,
+                                    hasOlder: history.hasOlder)
+    }
+
+    /// One transcript page from `offset` under the attach `attempt` began. A session the host
+    /// keeps no rows for yet, such as a new one, has none.
+    private func page(at offset: Int, attempt: Int) async throws -> [BotJSON] {
+        try engine.check(attempt)
+        guard let key = engine.storedKey else { throw BotFailure.stale }
+        let rows = try await engine.wire.sessionMessages(key, profile: engine.target.profile, offset: offset)
+        try engine.check(attempt)
+        return rows ?? []
+    }
+
+    /// Merges the newest page into the history. A failure keeps the rows held, and the chat
+    /// shows it once connected; a read the attach outlived reports nothing.
+    private func readNewestPage(attempt: Int) async {
+        do {
+            history.mergeNewest(try await page(at: 0, attempt: attempt))
+            historyFailure = nil
+        } catch {
+            guard attempt == engine.generation, !Task.isCancelled else { return }
+            historyFailure = error
+        }
+    }
+
+    /// The rows the host saved for a turn take their durable ids and full tool output: the
+    /// newest page is read again and replaces the transcript in place. It applies only if the
+    /// chat is still idle on the same attach, nothing is going out, and the page holds the
+    /// turn's rows; otherwise the next turn's re-read brings them.
+    private func refreshHistory(after turn: SavedTurn) {
+        let attempt = engine.generation, turns = turnsStarted
+        historyRefresh?.cancel()
+        historyRefresh = Task { [weak self] in
+            guard let page = try? await self?.page(at: 0, attempt: attempt), let self else { return }
+            let ids = Set(page.compactMap(HermesTranscriptHistory.id))
+            guard attempt == self.engine.generation, turns == self.turnsStarted, self.activeStreamID == nil,
+                  self.submitsInFlight == 0, ids.contains(turn.replyRowID), turn.promptRowID.map(ids.contains) != false
+            else { return }
+            self.history.mergeNewest(page)
+            self.historyFailure = nil
+            self.delegate?.hermesReplaceTranscript(self.historyTranscript())
+        }
+    }
+
+    /// Puts the page before the oldest row held in front (#1047), and says whether it added
+    /// rows. A failed read says why in the chat; one that lands after the history moved, or
+    /// after the attach changed, is dropped.
+    func loadOlderHistory() async -> Bool {
+        guard history.hasOlder, engine.connectionState == .connected else { return false }
+        let attempt = engine.generation, offset = history.nextOffset
+        let page: [BotJSON]
+        do {
+            page = try await self.page(at: offset, attempt: attempt)
+        } catch {
+            if attempt == engine.generation, !Task.isCancelled {
+                delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: error, address: engine.connection.address))
+            }
+            return false
+        }
+        guard offset == history.nextOffset else { return false }
+        let added = history.prependOlder(page)
+        delegate?.hermesPrependHistory(historyTranscript())
+        return added
+    }
+
+    /// After a failed history read, the chat's retry reads the newest page again and lays the
+    /// history out anew. Only while idle, so no running turn's rows are replaced.
+    func retryHistoryIfFailed() async {
+        guard historyFailure != nil, engine.connectionState == .connected, activeStreamID == nil else { return }
+        let attempt = engine.generation
+        await readNewestPage(attempt: attempt)
+        guard attempt == engine.generation, activeStreamID == nil, submitsInFlight == 0 else { return }
+        if let historyFailure {
+            delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: historyFailure, address: engine.connection.address))
+        } else {
+            delegate?.hermesReplaceTranscript(historyTranscript())
+        }
+    }
+
+    /// A newest-page read failed and none has succeeded since.
+    var hasHistoryFailure: Bool { historyFailure != nil }
+
+    /// Reattaches so the next attach re-reads the newest page and rebuilds the transcript:
+    /// frames were lost mid-turn.
     private func rebuildAfterGap() {
         needsRebuild = true
         reattach()
@@ -871,8 +993,14 @@ extension HermesChatTurnCoordinator: HermesConversationOwner {
         frames.forEach(apply)
     }
 
+    /// The settled history comes from REST pages (#1047), so the snapshot is live state only.
+    var readsSnapshotHistory: Bool { false }
+
+    /// A rebuild reads the newest history page first, while the engine still holds the frames.
     func conversationDidReadSnapshot(_ snapshot: BotJSON, runtime: String, attempt: Int) async throws {
         guard engine.isCurrent(snapshot) else { throw BotFailure.unsupported }
+        if engine.replayWasReset || needsRebuild { await readNewestPage(attempt: attempt) }
+        try engine.check(attempt)
         reconcile(with: snapshot)
     }
 
@@ -881,6 +1009,9 @@ extension HermesChatTurnCoordinator: HermesConversationOwner {
         heldFrames = []; deltasInRebuild = []; replayedReply = ""
         refusedSignIn = false
         delegate?.hermesConnectionDidChange(failure: nil)
+        if let historyFailure {
+            delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: historyFailure, address: engine.connection.address))
+        }
         sideTasks.didConnect(runtime: runtime, attempt: attempt)
         // Off the attach's path: the chips and the `/` panel fill in once their catalogs answer.
         Task { [settings] in await settings.connect(runtime: runtime, attempt: attempt) }

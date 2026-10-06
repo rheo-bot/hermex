@@ -298,11 +298,26 @@ Chat): `message.delta`, `message.interim`, `reasoning.delta` and
 `tool.start`/`tool.complete` (by `tool_id`) append; `thinking.delta` and
 `reasoning.available` are never reasoning; `session.title` sets the title with no rename
 call; `session.usage` feeds the context indicator; `message.complete`'s text is appended
-only when the deltas never carried it. A full snapshot replaces the transcript only on the
-rebuild signal (a gap, a backwards `seq`, a reset replay, a new runtime), by reattaching,
-and held deltas its in-flight reply already holds after the replayed text are dropped (the
-host appends each delta there before emitting it); a continuous reattach applies the
-replayed frames instead, so a return from the background repeats nothing. The turn
+only when the deltas never carried it. Settled history comes from REST transcript pages
+(#1047), not the snapshot: `GET /api/sessions/{key}/messages?profile=&order=latest&limit=100&offset=&include_compacted=true`,
+where `offset` counts display rows back from the newest and each page is oldest first. Both
+`session.resume` calls omit messages. `HermesTranscriptHistory` joins pages by position
+(row ids are not in display order: a compaction re-inserts the first turn under new ids) and
+drops repeats by id, since rows added meanwhile shift offsets; a short page is the first row.
+`HermesTranscriptProjection` makes each row `<key>/row-<id>` with `rowID = id`: tool rows join
+their call by `tool_call_id` with the full output, `hidden` rows and `[System:` notices never
+show, `codex_*` columns are never read, and the latest `_compressed_summary` row places the
+"Context compaction · Reference only" card after the compacted turns. On the rebuild signal
+(a gap, a backwards `seq`, a reset replay, a new runtime) the reattach re-reads the newest page
+before the frames held meanwhile go out, lays the snapshot's in-flight prompt and reply after
+it, and drops the held deltas that reply already holds after the replayed text (the host
+appends each delta there before emitting it); a continuous reattach applies the replayed
+frames instead, so a return from the background repeats nothing. A `message.complete` whose
+`persisted_turn` is `complete` re-reads the newest page once the turn ends, so its rows take
+their ids in place (positional render ids from a high base keep every row where it was; an
+older page moves the base back), unless a send or another turn started meanwhile. Background
+cards and local slash output (a goal's notice) are the chat's own and stay, after the history.
+A failed read keeps what is shown and sets the chat's load error, whose retry reads again. The turn
 identity is the stored key and the host's `turn_started_at`; a turn starts at
 `message.start` (prompted or not), an accepted send or a running snapshot, and ends once
 `message.complete` and `session.info {running: false}` have both arrived. An `error`

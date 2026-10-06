@@ -26,9 +26,11 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     /// Server-measured wall-clock seconds for the whole turn, set on its final
     /// assistant message (`_turnDuration`). Absent on older transcripts.
     let turnDuration: Double?
-    /// The host's durable `messages.id` for a Bot Chat row (`session.resume`'s
-    /// `row_id`), which `message.react` addresses. Set only by
-    /// `BotTranscriptProjection`; nil everywhere else.
+    /// The host's durable `messages.id` for a direct Hermes row: a Bot Chat row
+    /// (`session.resume`'s `row_id`, which `message.react` addresses), set by
+    /// `BotTranscriptProjection`, or a Hermes session's settled row (a REST page's
+    /// `id`), set by `HermesTranscriptProjection` (#1047). Nil everywhere else, so
+    /// it also tells a Hermes session's settled rows from its live ones.
     let rowID: Int?
 
     init(

@@ -184,12 +184,14 @@
 		A02400000000000000000001 /* Goal.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02400000000000000000002 /* Goal.swift */; };
 		C04600000000000000000001 /* ChatStreamCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04600000000000000000002 /* ChatStreamCoordinator.swift */; };
 		E1010000000000000000A001 /* HermesChatTurnCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1010000000000000000A002 /* HermesChatTurnCoordinator.swift */; };
+		E1047000000000000000A001 /* HermesTranscriptHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1047000000000000000A002 /* HermesTranscriptHistory.swift */; };
 		E1011000000000000000A001 /* HermesChatRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1011000000000000000A002 /* HermesChatRequests.swift */; };
 		E1013000000000000000A001 /* HermesChatSideTasks.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1013000000000000000A002 /* HermesChatSideTasks.swift */; };
 		E1015000000000000000A003 /* HermesChatSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1015000000000000000A004 /* HermesChatSettings.swift */; };
 		E1013000000000000000A005 /* HermesBtwPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1013000000000000000A006 /* HermesBtwPanel.swift */; };
 		C04600000000000000000003 /* ChatStreamCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */; };
 		E1010000000000000000A003 /* HermesChatTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1010000000000000000A004 /* HermesChatTurnTests.swift */; };
+		E1047000000000000000A003 /* HermesTranscriptPagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */; };
 		E1011000000000000000A003 /* HermesChatRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1011000000000000000A004 /* HermesChatRequestTests.swift */; };
 		E1012000000000000000A003 /* HermesChatAttachmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1012000000000000000A004 /* HermesChatAttachmentTests.swift */; };
 		E1013000000000000000A003 /* HermesChatSideTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1013000000000000000A004 /* HermesChatSideTaskTests.swift */; };
@@ -834,7 +836,9 @@
 		C04600000000000000000002 /* ChatStreamCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStreamCoordinator.swift; sourceTree = "<group>"; };
 		C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStreamCoordinatorTests.swift; sourceTree = "<group>"; };
 		E1010000000000000000A002 /* HermesChatTurnCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatTurnCoordinator.swift; sourceTree = "<group>"; };
+		E1047000000000000000A002 /* HermesTranscriptHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesTranscriptHistory.swift; sourceTree = "<group>"; };
 		E1010000000000000000A004 /* HermesChatTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatTurnTests.swift; sourceTree = "<group>"; };
+		E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesTranscriptPagingTests.swift; sourceTree = "<group>"; };
 		E1011000000000000000A002 /* HermesChatRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatRequests.swift; sourceTree = "<group>"; };
 		E1013000000000000000A002 /* HermesChatSideTasks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatSideTasks.swift; sourceTree = "<group>"; };
 		E1015000000000000000A004 /* HermesChatSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatSettings.swift; sourceTree = "<group>"; };
@@ -1457,6 +1461,7 @@
 					C04100000000000000000004 /* ChatComposerConfigLoaderTests.swift */,
 					C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */,
 					E1010000000000000000A004 /* HermesChatTurnTests.swift */,
+					E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */,
 					E1011000000000000000A004 /* HermesChatRequestTests.swift */,
 					E1012000000000000000A004 /* HermesChatAttachmentTests.swift */,
 					E1013000000000000000A004 /* HermesChatSideTaskTests.swift */,
@@ -1933,6 +1938,7 @@
 					C04100000000000000000002 /* ChatComposerConfigLoader.swift */,
 					C04600000000000000000002 /* ChatStreamCoordinator.swift */,
 					E1010000000000000000A002 /* HermesChatTurnCoordinator.swift */,
+					E1047000000000000000A002 /* HermesTranscriptHistory.swift */,
 					E1011000000000000000A002 /* HermesChatRequests.swift */,
 					E1013000000000000000A002 /* HermesChatSideTasks.swift */,
 					E1036000000000000000A002 /* HermesSlashCommands.swift */,
@@ -2722,6 +2728,7 @@
 					C04100000000000000000001 /* ChatComposerConfigLoader.swift in Sources */,
 					C04600000000000000000001 /* ChatStreamCoordinator.swift in Sources */,
 					E1010000000000000000A001 /* HermesChatTurnCoordinator.swift in Sources */,
+					E1047000000000000000A001 /* HermesTranscriptHistory.swift in Sources */,
 					E1011000000000000000A001 /* HermesChatRequests.swift in Sources */,
 					E1013000000000000000A001 /* HermesChatSideTasks.swift in Sources */,
 					E1036000000000000000A001 /* HermesSlashCommands.swift in Sources */,
@@ -2877,6 +2884,7 @@
 					C04100000000000000000003 /* ChatComposerConfigLoaderTests.swift in Sources */,
 					C04600000000000000000003 /* ChatStreamCoordinatorTests.swift in Sources */,
 					E1010000000000000000A003 /* HermesChatTurnTests.swift in Sources */,
+					E1047000000000000000A003 /* HermesTranscriptPagingTests.swift in Sources */,
 					E1011000000000000000A003 /* HermesChatRequestTests.swift in Sources */,
 					E1012000000000000000A003 /* HermesChatAttachmentTests.swift in Sources */,
 					E1013000000000000000A003 /* HermesChatSideTaskTests.swift in Sources */,

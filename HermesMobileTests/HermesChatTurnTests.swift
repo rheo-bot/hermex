@@ -457,8 +457,7 @@ import Observation
                           history: [BotJSON] = []) async -> Chat {
         addTeardownBlock { HermesHostFixture.reset() }
         let host = BotSocketHost()
-        host.always("session.resume", .init(result: resume(running: false, runtime: runtime, key: key, profile: profile,
-                                                           history: history)))
+        host.always("session.resume", .init(result: resume(running: false, runtime: runtime, key: key, profile: profile)))
         host.always("session.events.since", .init(result: BotFixtureWire.replay(latest: 0)))
         // The reduced reply `session.create` gives a session that has not started.
         host.always("session.create", .init(result: .object([
@@ -466,6 +465,7 @@ import Observation
             "messages": .array([]), "info": .object(["profile_name": .string(profile)])
         ])))
         let client = BotClient(http: host.connection(Self.connection))
+        serveHistory(history, key: key)
         let engine = HermesConversation(server: URL(string: "https://hermes.example")!, connection: Self.connection,
                                         target: target ?? .session(profile: profile, key: key), wire: client)
         let turn = HermesChatTurnCoordinator(engine: engine, isNetworkAvailable: { true })
@@ -497,8 +497,8 @@ import Observation
         let held = held ?? [event(7, "message.delta", ["text": .string(", fri")]),
                             event(8, "message.delta", ["text": .string("end")]),
                             event(9, "message.delta", ["text": .string(".")])]
-        let snapshot = resume(running: true, history: [userRow("Hi")],
-                              inflight: ["user": .string("Hi"), "assistant": .string(reply)])
+        serveHistory([userRow("Hi")])
+        let snapshot = resume(running: true, inflight: ["user": .string("Hi"), "assistant": .string(reply)])
         chat.host.next("session.events.since", .init(result: BotFixtureWire.replay(latest: 6, events: replayed)))
         chat.host.next("session.resume", .init(result: snapshot))
         chat.host.next("session.resume", .init(result: snapshot, before: held))
@@ -506,7 +506,10 @@ import Observation
         chat.receive(frame)
         await waitUntil("rebuilt") { chat.turn.engine.connectionState == .connected }
         chat.model.flushPendingStreamingContent()
-        XCTAssertEqual(chat.host.transcriptReads(since: leaving), [false, true], "one full read", file: file, line: line)
+        XCTAssertEqual(chat.host.transcriptReads(since: leaving), [false, false], "the snapshot carries no transcript",
+                       file: file, line: line)
+        XCTAssertEqual(HermesHostFixture.count("/api/sessions/tip/messages"), 2, "the gap re-read the newest page",
+                       file: file, line: line)
         XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", shows], file: file, line: line)
 
         let next = (held.compactMap { $0["seq"].integer }.max() ?? 6) + 1
@@ -538,8 +541,17 @@ import Observation
                  "payload": .object(payload)])
     }
 
+    /// A saved prompt as a transcript page carries it (#1047).
     private func userRow(_ text: String) -> BotJSON {
-        .object(["role": .string("user"), "text": .string(text), "timestamp": .number(1_790_000_000)])
+        .object(["id": .number(1), "role": .string("user"), "content": .string(text), "timestamp": .number(1_790_000_000)])
+    }
+
+    /// Serves `rows` as session `key`'s settled history, every page the same.
+    private func serveHistory(_ rows: [BotJSON], key: String = "tip") {
+        _ = HermesHostFixture.configuration { request in
+            guard request.url?.path == "/api/sessions/\(key)/messages" else { return nil }
+            return .json(200, .object(["session_id": .string(key), "messages": .array(rows)]))
+        }
     }
 
     private func resume(running: Bool, runtime: String = "runtime", key: String = "tip", profile: String = "default",

@@ -171,9 +171,10 @@ enum BotConnectionAdvice {
     /// The Profile the host's dashboard is scoped to (`/api/profiles/active` `current`), the
     /// one a new session runs under.
     func currentProfile() async throws -> String
-    /// A stored session's latest rows under `profile` (`HermesREST.sessionMessages`), or nil
-    /// when the host has no such session (404).
-    func sessionMessages(_ key: String, profile: String) async throws -> [BotJSON]?
+    /// A stored session's rows under `profile` (`HermesREST.sessionMessages`): its latest 500
+    /// without an offset, else one transcript page from `offset` (#1047). Nil when the host has
+    /// no such session (404).
+    func sessionMessages(_ key: String, profile: String, offset: Int?) async throws -> [BotJSON]?
     /// `text` spoken in `profile`'s voice (`HermesREST.speak`): the audio bytes, of a format the
     /// host's TTS provider chose. Any refusal or unreadable reply throws.
     func speech(text: String, profile: String) async throws -> Data
@@ -206,12 +207,17 @@ extension BotTransport {
         throw BotFailure.unsupported
     }
 
-    func sessionMessages(_ key: String, profile: String) async throws -> [BotJSON]? {
+    func sessionMessages(_ key: String, profile: String, offset: Int?) async throws -> [BotJSON]? {
         throw BotFailure.unsupported
     }
 
     func speech(text: String, profile: String) async throws -> Data {
         throw BotFailure.unsupported
+    }
+
+    /// A stored session's latest 500 rows, as a background task's result reads them.
+    func sessionMessages(_ key: String, profile: String) async throws -> [BotJSON]? {
+        try await sessionMessages(key, profile: profile, offset: nil)
     }
 
     func sessionPage(profile: String, offset: Int) async throws -> HermesSessionPage {
