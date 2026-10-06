@@ -397,27 +397,6 @@ import UIKit
         link = .idle
     }
 
-    /// A lost socket or a failed read is retried quietly, with growing delays, for
-    /// as long as the inbox stays open; the roster stays on screen meanwhile. Only
-    /// a refusal the user has to act on shows a message and the Reconnect button
-    /// (Update sign-in for a rejected password): sign-in, an unsupported host or
-    /// address, an address that now reaches a different host or is not a dashboard,
-    /// an access proxy's own sign-in, a host with browser sign-in only, a refused
-    /// gateway upgrade, a Hermes release older than the minimum, and any other
-    /// permanent HTTP client error (a 404 is not a Hermes host). Server errors, rate limits and JSON-RPC faults other than
-    /// "method missing" are the retry loop's problem; an empty inbox shows
-    /// `routeAdvice` if the host stays unreachable.
-    private static func isRetryable(_ error: Error) -> Bool {
-        switch error as? BotFailure {
-        case .unsupported, .wrongIdentity, .differentHost, .invalidAddress, .notDashboard,
-             .blocked, .browserSignIn, .upgradeRefused, .outdated: return false
-        case .rejected(-32601), .rejected(4090), .rejected(4130): return false
-        case .rejected(408), .rejected(429): return true
-        case .rejected(let code): return !(400..<500).contains(code)
-        default: return true
-        }
-    }
-
     /// The host could not be reached at all: no answer, or a proxy or Cloudflare
     /// answering for it. Repeated, these replace an empty inbox's skeleton with advice.
     private static func isRouteFailure(_ error: Error) -> Bool {
@@ -833,13 +812,18 @@ import UIKit
         }
     }
 
+    /// A lost socket or a failed read is retried quietly, with growing delays, for as long as
+    /// the inbox stays open; the roster stays on screen meanwhile. Only a refusal the user has
+    /// to act on (`BotConnectionAdvice.isRetryable`) shows a message and the Reconnect button
+    /// (Update sign-in for a rejected password). An empty inbox shows `routeAdvice` if the
+    /// host stays unreachable.
     private func drop(_ client: any BotTransport, error: Error) {
         reloadTask?.cancel(); reloadTask = nil; reloadWanted = false
         statusPollTask?.cancel(); statusPollTask = nil; setLiveStatuses([:])
         client.close(); wire = nil
         link = .disconnected
         let address = connection?.address
-        guard Self.isRetryable(error) else {
+        guard BotConnectionAdvice.isRetryable(error) else {
             routeFailures = 0; routeAdvice = nil
             errorMessage = address.map { BotConnectionAdvice.message(for: error, address: $0) }
                 ?? (error as? BotFailure ?? .transport).localizedDescription

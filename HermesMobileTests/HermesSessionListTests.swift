@@ -59,6 +59,30 @@ import Observation
         XCTAssertFalse(shown.contains("archived"))
     }
 
+    /// A list read that begins while "Load more" waits replaces it and reads that page itself,
+    /// so the list still pages past 100 rows and "Load more" never stays disabled.
+    func testAListReadDuringLoadMoreReadsThatPageItself() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page(rows(0..<100)), 100: page(rows(100..<130))]
+        let list = makeList(wire)
+        await list.openHermes()
+
+        wire.holdsPages = true
+        let more = Task { await list.loadMoreHermesSessions() }
+        await waitUntil("next page parked") { wire.pageReads.count == 2 }
+        wire.emit("sessions.changed")
+        await waitUntil("list read parked") { wire.pageReads.count == 3 }
+        XCTAssertTrue(list.isLoadingMoreSessions, "the next page is still on its way")
+        wire.holdsPages = false
+        wire.release()
+        await more.value
+        await waitUntil("both pages applied") { !list.isLoadingMoreSessions }
+
+        XCTAssertEqual(wire.pageReads.map(\.offset), [0, 100, 0, 100])
+        XCTAssertEqual(list.sessions.count, 130)
+        XCTAssertFalse(list.hasMoreSessions)
+    }
+
     // MARK: Rows
 
     func testAHermesRowOffersOnlyItsReadMark() {
@@ -213,6 +237,42 @@ import Observation
         XCTAssertEqual(list.sessions.first?.title, "New")
     }
 
+    // MARK: Connection
+
+    /// A lost socket reconnects quietly over the rows. A refusal the user has to act on, such
+    /// as a host below the minimum release, stops there and is kept as the list's error.
+    func testOnlyALostSocketReconnects() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a")])]
+        let list = makeList(wire, reconnectDelays: [.zero])
+        await list.openHermes()
+
+        wire.onDisconnect?(BotFailure.transport)
+        await waitUntil("reconnected") { wire.connects == 2 }
+        XCTAssertNil(list.sessionLoadError)
+
+        wire.onDisconnect?(BotFailure.outdated("0.20.0"))
+        XCTAssertFalse(list.isHermesConnected)
+        XCTAssertEqual(list.sessionLoadError as? BotFailure, .outdated("0.20.0"))
+        XCTAssertEqual(list.sessions.map(\.sessionId), ["a"], "the rows stay")
+    }
+
+    /// A client that left the socket without a word answers every read `.stale`: the next read
+    /// reconnects instead of leaving the list stale for as long as it is open.
+    func testAClientThatLeftTheSocketReconnects() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a", title: "Old")])]
+        let list = makeList(wire, reconnectDelays: [.zero])
+        await list.openHermes()
+
+        wire.pageFailure = .stale
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a", title: "New")])]
+        await list.openHermes()
+        await waitUntil("reconnected and read") { list.sessions.first?.title == "New" }
+
+        XCTAssertEqual(wire.connects, 2)
+    }
+
     // MARK: Profiles
 
     func testSwitchingProfileListsItsSessionsAndSavesThePick() async {
@@ -252,10 +312,11 @@ import Observation
 
     // MARK: Fixture
 
-    private func makeList(_ wire: HermesSessionListWire, profile: String = "default") -> SessionListViewModel {
+    private func makeList(_ wire: HermesSessionListWire, profile: String = "default",
+                          reconnectDelays: [Duration] = [.seconds(3600)]) -> SessionListViewModel {
         SessionListViewModel(server: server, unreadStore: SessionUnreadStore(defaults: defaults), hermes: HermesSessionListSource(
             connection: connection, profile: profile, makeWire: { _ in wire }, preferences: defaults,
-            changeDebounce: .zero, statusPollInterval: .seconds(3600), reconnectDelays: [.seconds(3600)]
+            changeDebounce: .zero, statusPollInterval: .seconds(3600), reconnectDelays: reconnectDelays
         ))
     }
 
@@ -273,12 +334,16 @@ import Observation
                  "model": .string("m"), "preview": .string(""), "title": .string(""), "current": .bool(false)])
     }
 
-    /// Waits on observation of the list and the wire, never a clock.
-    private func waitUntil(_ description: String, _ condition: @escaping @MainActor () -> Bool) async {
+    /// Waits on observation of the list and the wire, never a clock, and fails once nothing
+    /// changes for 5 s.
+    private func waitUntil(_ description: String, file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping @MainActor () -> Bool) async {
         while !condition() {
-            let changed = expectation(description: description)
+            let changed = XCTestExpectation(description: description)
             withObservationTracking { _ = condition() } onChange: { changed.fulfill() }
-            await fulfillment(of: [changed], timeout: 5)
+            guard await XCTWaiter().fulfillment(of: [changed], timeout: 5) == .completed else {
+                return XCTFail("Nothing changed while waiting for: \(description)", file: file, line: line)
+            }
         }
     }
 }
@@ -302,13 +367,16 @@ import Observation
     var holdsPages = false
     var holdsUnread = false
     var unreadFails = false
+    /// Thrown by the next page read instead of its page.
+    var pageFailure: BotFailure?
+    private(set) var connects = 0
     private(set) var pageReads: [(profile: String, offset: Int)] = []
     private(set) var answeredPages = 0
     private(set) var unreadWrites: [UnreadWrite] = []
     private(set) var calls: [(method: String, profile: String?)] = []
     @ObservationIgnored private var held: [CheckedContinuation<Void, Never>] = []
 
-    func connect() async throws {}
+    func connect() async throws { connects += 1 }
     func close() {}
 
     func call(_ call: HermesCall, validateDispatch: (() throws -> Void)?) async throws -> BotJSON {
@@ -331,6 +399,7 @@ import Observation
         let reply = pages[profile]?[offset] ?? HermesSessionPage(rows: [])
         if holdsPages { await withCheckedContinuation { held.append($0) } }
         answeredPages += 1
+        if let failure = pageFailure { pageFailure = nil; throw failure }
         if removed.contains(profile) { throw BotFailure.rejected(404) }
         return reply
     }

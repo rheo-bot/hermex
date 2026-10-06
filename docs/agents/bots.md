@@ -1108,7 +1108,8 @@ approval or a question, which the item can't tell apart), `starting`, `working` 
 `streaming` show Working, and the rest nothing; while a row is busy it re-reads every 5 s, as
 the inbox does. The socket listens while the list is on screen, rests while a chat covers it
 (so the open's read mark still goes out), closes when the list leaves or the app goes to the
-background, and reconnects on the inbox's backoff after a drop.
+background, and reconnects on the inbox's backoff after a drop. It stops on the refusals the
+inbox stops on (`BotConnectionAdvice.isRetryable`); pull to refresh tries again.
 
 ## Tasks on a Hermes host
 

@@ -89,6 +89,24 @@ enum BotFailure: Error, Equatable, LocalizedError {
 /// `URLError`s pass through `BotClient` unwrapped on purpose: reconnect logic reads any
 /// non-`BotFailure` error as transport, so only the copy maps them.
 enum BotConnectionAdvice {
+    /// Whether a screen that lost its connection to `error` should reconnect on its backoff
+    /// (the inbox, the Sessions list). False for a refusal the user has to act on: sign-in,
+    /// an unsupported host or address, an address that now reaches a different host or is not
+    /// a dashboard, an access proxy's own sign-in, a host with browser sign-in only, a refused
+    /// gateway upgrade, a Hermes release older than the minimum, and any other permanent HTTP
+    /// client error (a 404 is not a Hermes host). Server errors, rate limits and JSON-RPC
+    /// faults other than "method missing" are the retry loop's problem.
+    static func isRetryable(_ error: Error) -> Bool {
+        switch error as? BotFailure {
+        case .unsupported, .wrongIdentity, .differentHost, .invalidAddress, .notDashboard,
+             .blocked, .browserSignIn, .upgradeRefused, .outdated: return false
+        case .rejected(-32601), .rejected(4090), .rejected(4130): return false
+        case .rejected(408), .rejected(429): return true
+        case .rejected(let code): return !(400..<500).contains(code)
+        default: return true
+        }
+    }
+
     static func message(for error: Error, address: URL) -> String {
         let host = address.host ?? address.absoluteString
         if let error = error as? URLError {

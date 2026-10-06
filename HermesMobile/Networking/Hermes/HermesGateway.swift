@@ -443,7 +443,7 @@ private extension HermesCall {
     var isCancellationSafe: Bool {
         switch self {
         case .fileAttach, .completePath, .completeSlash, .subagentList, .subagentTail, .sessionActiveList,
-             .sessionMostRecent, .profileModelOptions: return true
+             .sessionMostRecent, .profilesList, .profileModelOptions: return true
         default: return false
         }
     }

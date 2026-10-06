@@ -1736,7 +1736,8 @@ final class SessionListViewModel {
         await showHermesProfile(profile)
     }
 
-    /// Reads the next page; one at a time, and a newer list read wins.
+    /// Reads the next page, one at a time. A list read that begins meanwhile replaces it and
+    /// reads that page itself, so the flag stays up until that read ends.
     func loadMoreHermesSessions() async {
         guard hasMoreSessions, !isLoadingMoreSessions, let wire = hermesWire, let profile = hermesProfile else { return }
         let serial = hermesReadSerial
@@ -1761,13 +1762,20 @@ final class SessionListViewModel {
         if hermesIsListening { requestHermesReload() }
     }
 
-    /// Reads as many pages as the list holds, and applies them only if no newer read began.
+    /// Reads as many pages as the list holds, plus the page a "Load more" it replaces was
+    /// reading, and applies them only if no newer read began.
     private func reloadHermes() async {
         guard let wire = hermesWire, let profile = hermesProfile else { return }
         hermesReadSerial += 1
         let serial = hermesReadSerial
-        let wanted = max(hermesPages.nextOffset, HermesREST.sessionPageSize)
-        defer { if serial == hermesReadSerial { isLoading = false } }
+        let pageSize = HermesREST.sessionPageSize
+        let wanted = max(hermesPages.nextOffset + (isLoadingMoreSessions ? pageSize : 0), pageSize)
+        defer {
+            if serial == hermesReadSerial {
+                isLoading = false
+                if isLoadingMoreSessions { isLoadingMoreSessions = false }
+            }
+        }
         var pages = HermesSessionPages()
         do {
             while pages.hasMore, pages.nextOffset < wanted {
@@ -1779,6 +1787,8 @@ final class SessionListViewModel {
             startHermesStatusRead(wire)
         } catch {
             guard serial == hermesReadSerial, hermesWire === wire, !Task.isCancelled else { return }
+            // The client left the socket without a word (a call its screen cancelled): reconnect.
+            if error as? BotFailure == .stale { return dropHermes(error) }
             if error as? BotFailure == .rejected(404), await moveOffRemovedHermesProfile(wire) { return }
             showHermesFailure(error)
         }
@@ -1881,16 +1891,19 @@ final class SessionListViewModel {
         if names != hermesProfiles { hermesProfiles = names }
     }
 
-    /// A lost socket: the rows stay, live states clear, and the list reconnects on the
-    /// backoff while it is on screen.
+    /// A lost socket: the rows stay, live states clear, and the list reconnects on the inbox's
+    /// backoff while it is on screen. A refusal the user has to act on
+    /// (`BotConnectionAdvice.isRetryable`) stops there and is kept as the list's error, which
+    /// shows once no rows do; pull to refresh tries again.
     private func dropHermes(_ error: Error) {
         guard let hermes else { return }
         let listening = hermesIsListening
         closeHermes()
         hermesIsListening = listening
         setHermesStates([:])
-        if sessions.isEmpty { showHermesFailure(error) }
-        guard listening, error as? BotFailure != .rejected(401) else { return }
+        let retries = BotConnectionAdvice.isRetryable(error)
+        if sessions.isEmpty || !retries { showHermesFailure(error) }
+        guard listening, retries else { return }
         let delay = hermes.reconnectDelays[min(hermesReconnectAttempts, hermes.reconnectDelays.count - 1)]
         hermesReconnectAttempts += 1
         hermesReconnectTask = Task { [weak self] in

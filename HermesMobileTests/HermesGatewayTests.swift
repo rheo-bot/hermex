@@ -218,6 +218,27 @@ import XCTest
         XCTAssertEqual(socket.sentRequests.filter { $0["method"].text == "prompt.submit" }.count, 1, "Never resent")
     }
 
+    /// A Profile read controls nothing on the host, so a screen whose task ends while it waits
+    /// (a chat pushed over the Sessions list) keeps its place on the socket.
+    func testCancellingAProfilesReadKeepsItsConsumer() async throws {
+        let http = connection()
+        let list = BotClient(http: http)
+        try await list.connect()
+        defer { list.close() }
+        let socket = try XCTUnwrap(sockets.first)
+        let sent = expectation(description: "roster on the wire")
+        socket.withholdReply = { _ in sent.fulfill(); return true }
+        let roster = Task { try await list.call(.profilesList(includeSessions: false)) }
+        await fulfillment(of: [sent], timeout: 2)
+
+        roster.cancel()
+        do { _ = try await roster.value; XCTFail("A cancelled read gets no reply") }
+        catch { XCTAssertTrue(error is CancellationError, "\(error)") }
+        socket.withholdReply = nil
+        let rows = try await list.call(.profilesList(includeSessions: false))["profiles"].list
+        XCTAssertEqual(rows, [], "the screen still reads on the socket")
+    }
+
     /// A required call left unanswered past its deadline ends only its consumer, which hears
     /// it once as a lost connection. The heartbeat and the silence deadline decide whether
     /// the socket itself is gone, so the other consumer stays and the reconnect joins it.
