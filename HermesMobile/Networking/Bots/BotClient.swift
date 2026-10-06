@@ -144,6 +144,24 @@ import Foundation
         return audio
     }
 
+    func sessionPage(profile: String, offset: Int) async throws -> HermesSessionPage {
+        guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
+        let attempt = self.attempt
+        let data = try await http.data(.sessionList(profile: profile, offset: offset),
+                                       validateDispatch: { try self.checkOwner(attempt) })
+        try checkOwner(attempt)
+        guard let page = try? JSONDecoder().decode(HermesSessionPage.self, from: data) else { throw BotFailure.unsupported }
+        return page
+    }
+
+    func setSessionUnread(_ unread: Bool, key: String, profile: String) async throws {
+        guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
+        let attempt = self.attempt
+        _ = try await http.data(.updateSession(key: key, profile: profile, unread: unread),
+                                validateDispatch: { try self.checkOwner(attempt) })
+        try checkOwner(attempt)
+    }
+
     func uploadImage(data: Data, filename: String, context: BotArtifactContext) async throws -> String {
         guard context.connectionID == http.connection.id, gateway.isAttached(consumerID) else { throw BotFailure.stale }
         let attempt = self.attempt

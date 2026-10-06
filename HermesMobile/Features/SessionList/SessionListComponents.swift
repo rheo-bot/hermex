@@ -100,9 +100,17 @@ struct SessionListRowActions {
     let export: (SessionSummary, SessionExportFormat) -> Void
 }
 
+/// Which row actions a session offers. A Hermes server's row (#1046) offers only Copy Full
+/// Title and Mark as Read or Unread; the slices of #702 that build its pin, rename, archive,
+/// delete, duplicate, move and export add them here.
 enum SessionRowActionPolicy {
     static func offersMutationActions(for session: SessionSummary) -> Bool {
-        !session.isSessionReadOnly
+        !session.isSessionReadOnly && session.hermes == nil
+    }
+
+    /// Export and Copy Deeplink, which only a webui server answers.
+    static func offersExport(for session: SessionSummary) -> Bool {
+        session.hermes == nil
     }
 
     static func canDuplicate(_ session: SessionSummary) -> Bool {
@@ -930,6 +938,28 @@ struct SessionRowContextMenu: View {
 
         // Export works for any session the server can see, including read-only
         // and foreign/CLI rows; it only needs a live server session ID.
+        if SessionRowActionPolicy.offersExport(for: session) {
+            exportMenu
+        }
+
+        if SessionRowActionPolicy.offersMutationActions(for: session) {
+            Button {
+                actions.archive(session)
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .disabled(!canShowSessionMutationActions || isMutating)
+
+            Button(role: .destructive) {
+                actions.delete(session)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(!canShowSessionMutationActions || isMutating)
+        }
+    }
+
+    private var exportMenu: some View {
         Menu {
             Button {
                 actions.export(session, .html)
@@ -959,22 +989,6 @@ struct SessionRowContextMenu: View {
             Label("Export", systemImage: "square.and.arrow.up")
         }
         .disabled(!canExportSession || isMutating)
-
-        if SessionRowActionPolicy.offersMutationActions(for: session) {
-            Button {
-                actions.archive(session)
-            } label: {
-                Label("Archive", systemImage: "archivebox")
-            }
-            .disabled(!canShowSessionMutationActions || isMutating)
-
-            Button(role: .destructive) {
-                actions.delete(session)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-            .disabled(!canShowSessionMutationActions || isMutating)
-        }
     }
 
     private var canShowSessionMutationActions: Bool {

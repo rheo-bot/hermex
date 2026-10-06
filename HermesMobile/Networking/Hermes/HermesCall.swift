@@ -37,6 +37,10 @@ enum HermesCall: Equatable, Sendable {
     /// The inbox's live-status read. `current_session_id` only marks a TUI's
     /// focused row, which Hermex never has.
     case sessionActiveList
+    /// The Sessions list's one Profile-scoped read after it connects (#1046): naming the
+    /// Profile makes the host watch its store for `sessions.changed`, which it does only once
+    /// some call names it. A Profile the host no longer has answers 4064.
+    case sessionMostRecent(profile: String)
 
     // Sessions
     /// Mints a plain session under the Profile: no title, not hidden. The host writes no
@@ -222,6 +226,7 @@ enum HermesCall: Equatable, Sendable {
         case .sessionResume: return "session.resume"
         case .sessionEventsSince: return "session.events.since"
         case .sessionActiveList: return "session.active_list"
+        case .sessionMostRecent: return "session.most_recent"
         case .promptSubmit, .promptRewind: return "prompt.submit"
         case .sessionSteer: return "session.steer"
         case .sessionRedirect: return "session.redirect"
@@ -283,7 +288,7 @@ enum HermesCall: Equatable, Sendable {
         case .sessionCreate(let profile):
             return ["profile": .string(profile), "title": .string(Self.botChatTitle),
                     "hidden": .bool(true), "follow_profile_config": .bool(true)]
-        case .sessionNew(let profile): return ["profile": .string(profile)]
+        case .sessionNew(let profile), .sessionMostRecent(let profile): return ["profile": .string(profile)]
         case .sessionTitle(let sessionID): return ["session_id": .string(sessionID), "title": .string(Self.botChatTitle)]
         case .sessionResume(let profile, let sessionID, let omitMessages):
             var params: [String: BotJSON] = ["profile": .string(profile), "session_id": .string(sessionID),
@@ -403,7 +408,7 @@ enum HermesCall: Equatable, Sendable {
             else { valid = !name.isEmpty }
         case .profilesConfigure(let changes): valid = changes.isAdmissible
         case .profilesCreate(let profile): valid = profile.isAdmissible
-        case .sessionCreate(let profile), .sessionNew(let profile): valid = !profile.isEmpty
+        case .sessionCreate(let profile), .sessionNew(let profile), .sessionMostRecent(let profile): valid = !profile.isEmpty
         case .sessionTitle(let sessionID), .commandsCatalog(let sessionID), .subagentList(let sessionID):
             valid = !sessionID.isEmpty
         case .configSet(let sessionID, _, let setting):

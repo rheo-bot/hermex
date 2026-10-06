@@ -38,12 +38,12 @@ struct SessionRowView: View {
         .accessibilityLabel(accessibilitySummary)
     }
 
+    /// The row's title; an untitled Hermes row shows its first prompt (`preview`, #1046).
     static func displayTitle(for session: SessionSummary) -> String {
-        let title = session.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let title, !title.isEmpty else {
-            return String(localized: "Untitled Session")
-        }
-        return title
+        let title = [session.title, session.hermes?.preview]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        return title ?? String(localized: "Untitled Session")
     }
 
     static func isActiveStreaming(_ session: SessionSummary) -> Bool {

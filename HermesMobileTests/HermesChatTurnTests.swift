@@ -79,6 +79,22 @@ import Observation
         XCTAssertEqual(chat.model.messages.map(\.content), ["Done."])
     }
 
+    /// A title that is only the reference line a photo-only send appends shows the photo's
+    /// name, never the raw line (#1046).
+    func testAnAttachmentOnlyTitleShowsTheAttachmentsName() async {
+        let chat = await openChat()
+        chat.receive(event(1, "session.title", ["title": .string(Self.photoReference)]))
+        XCTAssertEqual(chat.model.displayTitle, "IMG_2041.jpg")
+    }
+
+    /// The host's instant title cuts a photo's reference line at 48 characters, before the
+    /// photo's name. The header names the chat after the first prompt's photo instead (#1046).
+    func testATitleCutBeforeTheAttachmentsNameShowsTheFirstPromptsAttachment() async {
+        let chat = await openChat(history: [userRow(Self.photoReference)])
+        chat.receive(event(1, "session.title", ["title": .string("[The user attached an image…")]))
+        XCTAssertEqual(chat.model.displayTitle, "IMG_2041.jpg")
+    }
+
     /// An error after the turn's `message.start` with no completion after it: the turn ends
     /// failed when the host settles it.
     func testALoneErrorEndsTheTurnAsFailedWhenTheHostSettles() async {
@@ -431,11 +447,18 @@ import Observation
         }
     }
 
+    /// The two reference lines a photo-only send appends, for an upload the host named
+    /// `dashboard_<date>_<time>_<hex>_IMG_2041.jpg`.
+    private static let photoReference = "[The user attached an image: dashboard_20261005_120000_0123abcd_IMG_2041.jpg]\n"
+        + "[Examine it with the vision_analyze tool using image_url: /home/u/.hermes/images/dashboard_20261005_120000_0123abcd_IMG_2041.jpg]"
+
     private func openChat(runtime: String = "runtime", key: String = "tip", profile: String = "default",
-                          target: ConversationTarget? = nil, drafts: ChatDraftStore? = nil) async -> Chat {
+                          target: ConversationTarget? = nil, drafts: ChatDraftStore? = nil,
+                          history: [BotJSON] = []) async -> Chat {
         addTeardownBlock { HermesHostFixture.reset() }
         let host = BotSocketHost()
-        host.always("session.resume", .init(result: resume(running: false, runtime: runtime, key: key, profile: profile)))
+        host.always("session.resume", .init(result: resume(running: false, runtime: runtime, key: key, profile: profile,
+                                                           history: history)))
         host.always("session.events.since", .init(result: BotFixtureWire.replay(latest: 0)))
         // The reduced reply `session.create` gives a session that has not started.
         host.always("session.create", .init(result: .object([

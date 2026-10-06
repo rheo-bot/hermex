@@ -315,8 +315,9 @@ the draft and the run), and Stop & send is `session.redirect`. Stop is
 lost; any client's stop (an interrupted `message.complete`) clears the receipt. A Send
 shows no model or reasoning change: no `config.set` or `session.cwd.set` goes out.
 Send and Queue carry staged files (#1012; see the attachments section below). The
-temporary entry is the inbox's "New Session" (DEBUG and Hermex Branch), on the dashboard's
-`/api/profiles/active` `current` Profile, until #709's Sessions tab.
+temporary entries are the inbox's "New Session" and "Sessions" (DEBUG and Hermex Branch, see
+Sessions list on Hermes below), on the server's picked Profile or the dashboard's
+`/api/profiles/active` `current`, until #709's bottom bar.
 
 Its goal, `/btw` and `/background` are `HermesChatSideTasks` (#1013); the main chat routes
 only these three `/` commands and sends any other `/` text as typed. Every goal verb and a
@@ -1067,6 +1068,47 @@ Reduce Motion keeps the eyes still, plays no bits and drops the squish. The firs
 is adaptive: `Color.botBody` paints it white in dark appearance and black in
 light, with eyes inverted to match, so the face and the swatch never vanish
 into the background.
+
+## Sessions list on Hermes
+
+A Hermes server's Sessions list (#1046) is `HermesSessionListView`: the webui list's rows,
+live states and row menu on a `SessionListViewModel` built with a `HermesSessionListSource`,
+pushed from the inbox's + menu (DEBUG and Hermex Branch) until #709's bottom bar. It lists
+one Profile, the server's pick (`HermesProfilePreference`, shared with the composer's Profile
+chip and never written to the host), switchable from its Profile menu, and follows a pick made
+elsewhere when it reappears.
+
+The page is `GET /api/sessions?profile=&order=recent&archived=exclude&limit=100&offset=&min_messages=1&exclude_sources=cron,kanban,oneshot,subagent,tool`
+(`HermesREST.sessionList`); every parameter is sent, because the defaults order by creation,
+list empty sessions and keep machine-run sources. `total` is never read: it counts rows the
+list never shows. Each page also appends every pinned row its own rows missed, archived ones
+included, so `HermesSessionPages` keeps a row once by identity (`_lineage_root_id`, which only
+a legacy compression chain carries, else `id`) and drops archived rows. A page shorter than
+100 ends the list; a longer one can't tell back-filled pins from its own, so it reads on
+unless it brought no new row. A row is opened and marked by its `id`, the chain's tip, and an
+unreadable row is skipped without shortening its page. Titles and `preview` (the first prompt,
+flattened and cut at 60 with `...`) drop the reference lines a Hermex send appends, whole or
+cut off (`MessageAttachment.hermesTitle`); the host's instant title cuts a photo's line at 48
+before the photo's name, so such a row reads as untitled and the open chat's header falls back
+to the first prompt's attachment.
+
+Unread is the host's `unread`, shared with Desktop. Opening a row sends
+`PATCH /api/sessions/{id} {unread: false, profile}` and clears the dot at once, showing the
+host's mark again if the write fails; Mark as Read and Unread send `unread` the same way. The
+first read after a chat closes marks it read again when the host calls it unread, since the
+reply that finished while it was open was seen. A session no client has marked reads as read.
+
+After it connects, the list sends `session.most_recent {profile}`: the host watches a
+Profile's store for `sessions.changed` only once some call names it, and 4064 (or a list 404)
+means the Profile is gone, so the list moves to the server's pick or the dashboard's `current`.
+`sessions.changed` reloads the loaded pages after a trailing one-second quiet, one read in
+flight and at most one more queued, and only the newest read applies. Each read is followed by
+`session.active_list`, mapped onto listed rows by `session_key`: `waiting` shows Input (an
+approval or a question, which the item can't tell apart), `starting`, `working` and
+`streaming` show Working, and the rest nothing; while a row is busy it re-reads every 5 s, as
+the inbox does. The socket listens while the list is on screen, rests while a chat covers it
+(so the open's read mark still goes out), closes when the list leaves or the app goes to the
+background, and reconnects on the inbox's backoff after a drop.
 
 ## Tasks on a Hermes host
 

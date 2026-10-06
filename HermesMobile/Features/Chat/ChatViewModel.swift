@@ -6393,11 +6393,20 @@ final class ChatViewModel {
     }
 
     private func applyLiveActivitySessionTitle(_ title: String) {
-        displayTitle = Self.displayTitle(from: title)
+        displayTitle = Self.displayTitle(from: hermesTurn == nil ? title : hermesHeaderTitle(title))
         // A Hermes session's turns drive their own activity (#1014); the one on screen may be
         // another session's.
         guard hermesTurn == nil else { return }
         liveActivityManager.update(.sessionTitle(displayTitle))
+    }
+
+    /// A Hermes session's title as its header shows it (#1046), without the reference lines a
+    /// Hermex send appends (`MessageAttachment.hermesTitle`). The host's instant title cuts a
+    /// photo's reference before the photo's name, so then the first prompt's first attachment
+    /// names the chat.
+    private func hermesHeaderTitle(_ title: String) -> String? {
+        MessageAttachment.hermesTitle(title)
+            ?? messages.first { $0.role == "user" }?.attachments?.first?.name
     }
 
     private func finishListening() {

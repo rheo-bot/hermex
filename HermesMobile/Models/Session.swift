@@ -180,7 +180,19 @@ struct SessionStatusResponse: Decodable, Equatable {
 }
 
 struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
+    /// What a Hermes server's row (#1046) carries beyond a webui one. Never decoded: only
+    /// `HermesSessionRow` makes it.
+    struct Hermes: Hashable {
+        /// The row's identity across a legacy compression chain, whose tip `sessionId` names.
+        let lineageRoot: String
+        /// The host's read mark, which every client shares.
+        let unread: Bool
+        /// The first prompt, cut at 60 characters, as an untitled row shows it.
+        let preview: String?
+    }
+
     var id: String {
+        if let hermes { return hermes.lineageRoot }
         if let sessionId, !sessionId.isEmpty {
             return sessionId
         }
@@ -227,6 +239,8 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
     /// redacted like the title). Absent on title matches, on every non-search
     /// response, and on servers older than the commit that added it.
     let matchPreview: String?
+    /// Set only on a Hermes server's row.
+    let hermes: Hermes?
 
     init(
         sessionId: String? = nil,
@@ -261,7 +275,8 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
         readOnly: Bool? = nil,
         isReadOnly: Bool? = nil,
         matchType: String? = nil,
-        matchPreview: String? = nil
+        matchPreview: String? = nil,
+        hermes: Hermes? = nil
     ) {
         self.sessionId = sessionId
         self.title = title
@@ -296,6 +311,7 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
         self.isReadOnly = isReadOnly
         self.matchType = matchType
         self.matchPreview = matchPreview
+        self.hermes = hermes
     }
 
     enum CodingKeys: String, CodingKey {
@@ -354,6 +370,7 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
         isReadOnly = container.decodeLossyBoolIfPresent(forKey: .isReadOnly)
         matchType = container.decodeLossyStringIfPresent(forKey: .matchType)
         matchPreview = container.decodeLossyStringIfPresent(forKey: .matchPreview)
+        hermes = nil
     }
 
     /// Decodes a session array a row at a time, so one unreadable row costs that
@@ -417,6 +434,7 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
         isReadOnly = detail.isReadOnly
         matchType = nil
         matchPreview = nil
+        hermes = nil
     }
 
     /// Applies the import response without dropping list metadata that the
@@ -456,7 +474,8 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
             readOnly: imported.readOnly ?? readOnly,
             isReadOnly: imported.isReadOnly ?? isReadOnly,
             matchType: imported.matchType ?? matchType,
-            matchPreview: imported.matchPreview ?? matchPreview
+            matchPreview: imported.matchPreview ?? matchPreview,
+            hermes: hermes
         )
     }
 
@@ -496,7 +515,8 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
             readOnly: readOnly,
             isReadOnly: isReadOnly,
             matchType: matchType,
-            matchPreview: matchPreview
+            matchPreview: matchPreview,
+            hermes: hermes
         )
     }
 }

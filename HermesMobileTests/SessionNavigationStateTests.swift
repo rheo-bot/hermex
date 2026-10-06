@@ -3,6 +3,18 @@ import XCTest
 @testable import HermesMobile
 
 final class SessionNavigationStateTests: XCTestCase {
+    /// A Hermes row (#1046) is known by its lineage root and opens its own id, which on a
+    /// legacy compression chain is the tip, in the row's Profile. A webui row opens no Hermes chat.
+    func testAHermesRowOpensItsOwnIDInItsProfile() {
+        let row = HermesSessionRow(id: "tip", profile: "research", lineageRootID: "root").summary(in: "default")
+
+        XCTAssertEqual(row.id, "root")
+        XCTAssertEqual(row.hermesTarget(listedIn: "default"), .session(profile: "research", key: "tip"))
+        XCTAssertEqual(HermesSessionRow(id: "plain").summary(in: "default").hermesTarget(listedIn: "default"),
+                       .session(profile: "default", key: "plain"))
+        XCTAssertNil(SessionSummary(sessionId: "webui", profile: "default").hermesTarget(listedIn: "default"))
+    }
+
     func testPushFallbackStaysOnListInsteadOfRestoringPreviousChat() {
         let previous = SessionSummary(sessionId: "old", title: "Old")
         var state = SessionNavigationState(lastSelectedSessionID: "old")

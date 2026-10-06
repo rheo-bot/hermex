@@ -159,6 +159,10 @@ enum BotConnectionAdvice {
     /// `text` spoken in `profile`'s voice (`HermesREST.speak`): the audio bytes, of a format the
     /// host's TTS provider chose. Any refusal or unreadable reply throws.
     func speech(text: String, profile: String) async throws -> Data
+    /// One page of `profile`'s sessions for the Sessions list (`HermesREST.sessionList`, #1046).
+    func sessionPage(profile: String, offset: Int) async throws -> HermesSessionPage
+    /// Sets a session's read mark on the host (`HermesREST.updateSession`, #1046).
+    func setSessionUnread(_ unread: Bool, key: String, profile: String) async throws
     /// Ends this screen's calls, uploads and downloads; the shared socket stays for others.
     func close()
 }
@@ -189,6 +193,14 @@ extension BotTransport {
     }
 
     func speech(text: String, profile: String) async throws -> Data {
+        throw BotFailure.unsupported
+    }
+
+    func sessionPage(profile: String, offset: Int) async throws -> HermesSessionPage {
+        throw BotFailure.unsupported
+    }
+
+    func setSessionUnread(_ unread: Bool, key: String, profile: String) async throws {
         throw BotFailure.unsupported
     }
 

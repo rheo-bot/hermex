@@ -335,6 +335,7 @@ private extension SessionSummary {
         isReadOnly = cachedSession.isReadOnly
         matchType = nil
         matchPreview = nil
+        hermes = nil
     }
 }
 

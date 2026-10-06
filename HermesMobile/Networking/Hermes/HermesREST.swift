@@ -52,7 +52,13 @@ import Foundation
 /// `scripts/local-hermes`: JSON, not multipart; `{ok, transcript, provider}`, with silence an
 /// empty transcript; and `{detail}` for a refusal or a provider failure (400), an unknown
 /// Profile (404) or an unexpected failure (500).
+/// The Sessions list's page and read mark (#1046) are read at the same pin, checked against
+/// `scripts/local-hermes` and the shape of a read-only `GET /api/sessions` on a 0.21.5 host;
+/// `docs/agents/bots.md` § Sessions list on Hermes has the recipe.
 enum HermesREST: Equatable, Sendable {
+    /// The most rows `GET /api/sessions` lists in one page.
+    static let sessionPageSize = 100
+
     /// Public, so it reads the host before any credential is sent.
     case status
     case login(username: String, password: String)
@@ -86,6 +92,13 @@ enum HermesREST: Equatable, Sendable {
     /// A stored session's latest rows under `profile`: a background task's `bg_<id>` side
     /// session, whose last reply is its durable result (#1013).
     case sessionMessages(key: String, profile: String)
+    /// One page of `profile`'s sessions for the Sessions list (#1046): latest activity first,
+    /// without archived, empty or machine-run rows, `sessionPageSize` at a time from `offset`.
+    /// Each page also brings every pinned row it missed, archived ones included.
+    case sessionList(profile: String, offset: Int)
+    /// Sets a session's read mark for every client, across its compression lineage: `false`
+    /// reads it up to now, `true` marks it unread (#1046).
+    case updateSession(key: String, profile: String, unread: Bool)
     /// Every Profile's scheduled Tasks, paused and completed included: a bare array.
     case cronJobs
     /// Creates a Task in `profile`, or in the host's default Profile when nil.
@@ -250,6 +263,24 @@ enum HermesREST: Equatable, Sendable {
         case .sessionMessages(let key, let profile):
             guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
             return Self.get(try Self.url(base, "api/sessions/\(key)/messages", profile: profile))
+        case .sessionList(let profile, let offset):
+            guard !profile.isEmpty, offset >= 0,
+                  var parts = URLComponents(url: base.appendingPathComponent("api/sessions"), resolvingAgainstBaseURL: false)
+            else { throw BotFailure.invalidAddress }
+            // Every value is sent: the host's defaults order by creation, list empty sessions
+            // and keep cron, Kanban, one-shot, subagent and tool runs.
+            parts.queryItems = [
+                URLQueryItem(name: "profile", value: profile), URLQueryItem(name: "order", value: "recent"),
+                URLQueryItem(name: "archived", value: "exclude"), URLQueryItem(name: "limit", value: String(Self.sessionPageSize)),
+                URLQueryItem(name: "offset", value: String(offset)), URLQueryItem(name: "min_messages", value: "1"),
+                URLQueryItem(name: "exclude_sources", value: "cron,kanban,oneshot,subagent,tool")
+            ]
+            guard let url = parts.url else { throw BotFailure.invalidAddress }
+            return Self.get(url)
+        case .updateSession(let key, let profile, let unread):
+            guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
+            return try Self.send("PATCH", base.appendingPathComponent("api/sessions").appendingPathComponent(key),
+                                 ["unread": .bool(unread), "profile": .string(profile)])
         case .cronJobs: return Self.get(base.appendingPathComponent("api/cron/jobs"))
         case .cronCreate(let profile, let fields):
             return try Self.send("POST", try Self.url(base, "api/cron/jobs", profile: profile), fields)
