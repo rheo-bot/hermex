@@ -177,7 +177,7 @@ import Observation
         let refusal = try Self.fixture("slash.exec /steer")
         let reply = BotSocketHost.Reply(error: refusal["code"].integer, message: refusal["message"].text ?? "")
 
-        let sent = await openChat(messages: [.object(["role": .string("user"), "text": .string("hi"), "content": .string("hi")])])
+        let sent = await openChat(messages: [.object(["id": .number(1), "role": .string("user"), "content": .string("hi")])])
         XCTAssertEqual(sent.model.messages.map(\.role), ["user"])
         sent.host.always("slash.exec", reply)
         let refused = await sent.model.runHermesSlashCommand("/steer")
@@ -266,20 +266,23 @@ import Observation
         }
     }
 
-    /// A Hermes chat attached to an idle session on `runtime`, holding `messages`, with the
-    /// recorded catalog read unless `catalog` is false.
+    /// A Hermes chat attached to an idle session on `runtime`, whose transcript page holds
+    /// `messages` (#1047), with the recorded catalog read unless `catalog` is false.
     private func openChat(messages: [BotJSON] = [], catalog: Bool = true) async -> Chat {
         addTeardownBlock { HermesHostFixture.reset() }
         let host = BotSocketHost()
         host.always("session.resume", .init(result: .object([
             "session_id": .string("runtime"), "session_key": .string("tip"), "running": .bool(false),
-            "messages": .array(messages), "info": .object(["profile_name": .string("default")])
+            "messages": .array([]), "info": .object(["profile_name": .string("default")])
         ])))
         host.always("session.events.since", .init(result: BotFixtureWire.replay(latest: 0)))
         if catalog, let reply = try? Self.fixture("commands.catalog") {
             host.always("commands.catalog", .init(result: reply))
         }
         let client = BotClient(http: host.connection(Self.connection))
+        _ = HermesHostFixture.configuration { request in
+            request.url?.path == "/api/sessions/tip/messages" ? .json(200, .object(["messages": .array(messages)])) : nil
+        }
         let engine = HermesConversation(server: URL(string: "https://hermes.example")!, connection: Self.connection,
                                         target: .session(profile: "default", key: "tip"), wire: client)
         let turn = HermesChatTurnCoordinator(engine: engine, isNetworkAvailable: { true })

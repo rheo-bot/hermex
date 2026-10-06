@@ -291,8 +291,9 @@ import UIKit
             + quoted + "\n\n"
             + "--- Context Warnings ---\n- \(quoted): path is outside the allowed workspace"
         let chat = await openChat(history: [
-            .object(["role": .string("user"), "text": .string(stored), "timestamp": .number(1_790_000_000)]),
-            .object(["role": .string("assistant"), "text": .string("Both look fine."), "timestamp": .number(1_790_000_010)])
+            .object(["id": .number(1), "role": .string("user"), "content": .string(stored), "timestamp": .number(1_790_000_000)]),
+            .object(["id": .number(2), "role": .string("assistant"), "content": .string("Both look fine."),
+                     "timestamp": .number(1_790_000_010)])
         ])
         let row = try XCTUnwrap(chat.model.messages.first)
         XCTAssertEqual(row.content, "Compare these")
@@ -388,7 +389,8 @@ import UIKit
         }
     }
 
-    /// A Hermes chat attached to an idle session whose saved transcript is `history`.
+    /// A Hermes chat attached to an idle session whose saved transcript is `history`, the rows
+    /// of its transcript page (#1047).
     private struct Chat {
         let model: ChatViewModel
         let turn: HermesChatTurnCoordinator
@@ -416,12 +418,15 @@ import UIKit
         let host = BotSocketHost()
         host.always("session.resume", .init(result: .object([
             "session_id": .string("runtime"), "session_key": .string("tip"), "running": .bool(false),
-            "messages": .array(history), "info": .object(["profile_name": .string("default")])
+            "messages": .array([]), "info": .object(["profile_name": .string("default")])
         ])))
         host.always("session.events.since", .init(result: BotFixtureWire.replay(latest: 0)))
         let copies = BotAttachmentCopies()
         let drafts = ChatDraftStore(persistence: BotMemoryDrafts(), attachmentStore: copies, debounceDuration: .seconds(60))
         let client = BotClient(http: host.connection(Self.connection))
+        _ = HermesHostFixture.configuration { request in
+            request.url?.path == "/api/sessions/tip/messages" ? .json(200, .object(["messages": .array(history)])) : nil
+        }
         let engine = HermesConversation(server: URL(string: "https://hermes.example")!, connection: Self.connection,
                                         target: .session(profile: "default", key: "tip"), wire: client)
         let turn = HermesChatTurnCoordinator(engine: engine, isNetworkAvailable: { true })
