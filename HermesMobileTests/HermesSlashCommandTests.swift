@@ -56,8 +56,10 @@ import Observation
         XCTAssertEqual(slash.route("reset"), .appOwned(SlashCommandCatalog.hermesCommand(named: "new")!), "an alias of /new")
         XCTAssertEqual(slash.route("yolo"), .appOwned(SlashCommandCatalog.hermesCommand(named: "yolo")!))
         XCTAssertEqual(slash.route("title"), .appOwned(SlashCommandCatalog.command(named: "title")!), "#1048")
-        XCTAssertEqual(slash.route("undo"), .held)
+        XCTAssertEqual(slash.route("undo"), .appOwned(SlashCommandCatalog.command(named: "undo")!), "#1049")
+        XCTAssertEqual(slash.route("retry"), .appOwned(SlashCommandCatalog.command(named: "retry")!), "#1049")
         XCTAssertEqual(slash.route("compact"), .held)
+        XCTAssertEqual(slash.route("branch"), .held)
         XCTAssertEqual(slash.route("demo-skill").isSkill, true)
         XCTAssertEqual(slash.route("context"), .host)
         XCTAssertEqual(slash.route("ctx"), .host)
@@ -81,8 +83,8 @@ import Observation
 
     func testAHeldCommandShowsTheNoticeAndSendsNothing() async {
         let chat = await openChat()
-        let result = await chat.model.runHermesSlashCommand("/undo")
-        XCTAssertEqual(result, .unsupported(friendlyMessage: "Hermex can't run /undo in a Hermes chat yet (#702)."))
+        let result = await chat.model.runHermesSlashCommand("/compact")
+        XCTAssertEqual(result, .unsupported(friendlyMessage: "Hermex can't run /compact in a Hermes chat yet (#702)."))
         XCTAssertEqual(chat.writes("slash.exec"), [])
         XCTAssertEqual(chat.writes("prompt.submit"), [])
     }

@@ -125,7 +125,7 @@ struct ChatMessageActionMenu: View {
 
     /// The actions for this message in display order. Mutating actions are
     /// disabled while the transcript is cached or a stream is active, and absent
-    /// where the chat cannot rewrite its history.
+    /// where the chat cannot rewrite its history (`MessageActionContext`).
     var items: [ChatMessageActionItem] {
         var items: [ChatMessageActionItem] = []
         let offersHistoryActions = context.offersHistoryActions
@@ -160,7 +160,7 @@ struct ChatMessageActionMenu: View {
             ))
         }
 
-        if offersHistoryActions {
+        if context.offersFork {
             items.append(ChatMessageActionItem(
                 kind: .fork,
                 title: String(localized: "Fork From Here"),

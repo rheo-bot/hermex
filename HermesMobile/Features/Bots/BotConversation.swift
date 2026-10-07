@@ -1124,6 +1124,9 @@ import Observation
         } catch {
             guard owner == generation, !Task.isCancelled else { return }
             localOperation = false
+            // A refused cut carries the host's message (#1049); Retry reads only its code.
+            var error = error
+            if case BotSettingFailure.rejected(let code, _) = error { error = BotFailure.rejected(code) }
             switch error {
             case BotFailure.stale: return
             case BotFailure.rejected(4009):

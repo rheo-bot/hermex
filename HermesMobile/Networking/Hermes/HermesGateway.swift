@@ -475,15 +475,16 @@ private extension HermesCall {
 
     /// Room rejections carry the host's reason as `BotRoomFailure`; setting rejections
     /// carry its message as `BotSettingFailure`. So do a refused `/goal`, whose 4004 message
-    /// says what was wrong with it (#1013), a refused slash command (#1036), and a refused
-    /// `/title`, whose 4022 message names the session already using it (#1048).
+    /// says what was wrong with it (#1013), a refused slash command (#1036), a refused
+    /// `/title`, whose 4022 message names the session already using it (#1048), and a refused
+    /// rewind or `/undo`, whose 5008 message says why the host could not write the cut (#1049).
     var rejection: Rejection {
         if method.hasPrefix("groups.") { return .room }
         switch self {
         case .configSet, .sessionCwdSet, .sessionControl, .modelOptions, .configuredModelOptions, .profileModelOptions,
              .sessionControlRead: return .setting
         case .commandDispatch(let name, _, _) where name == "goal": return .setting
-        case .slashExec, .sessionRename: return .setting
+        case .slashExec, .sessionRename, .promptRewind, .sessionUndo: return .setting
         default: return .plain
         }
     }

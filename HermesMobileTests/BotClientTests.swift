@@ -608,12 +608,14 @@ import XCTest
     }
 
     /// A rewind cuts one durable row and resends a prompt; an empty prompt or a
-    /// row id the host never issued is refused before the socket.
+    /// row id the host never issued is refused before the socket, as is an undo
+    /// without its runtime (#1049).
     func testRewindAdmitsOnlyARowAndThePromptItResends() {
         let rejected: [HermesCall] = [
             .promptRewind(sessionID: "", text: "hi", beforeRowID: 41),
             .promptRewind(sessionID: "runtime", text: " \n", beforeRowID: 41),
-            .promptRewind(sessionID: "runtime", text: "hi", beforeRowID: 0)
+            .promptRewind(sessionID: "runtime", text: "hi", beforeRowID: 0),
+            .sessionUndo(runtime: "")
         ]
         for call in rejected {
             XCTAssertThrowsError(try call.params()) { XCTAssertEqual($0 as? BotFailure, .unsupported) }

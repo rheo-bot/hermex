@@ -193,6 +193,7 @@
 		C04600000000000000000003 /* ChatStreamCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */; };
 		E1010000000000000000A003 /* HermesChatTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1010000000000000000A004 /* HermesChatTurnTests.swift */; };
 		E1047000000000000000A003 /* HermesTranscriptPagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */; };
+		E1049000000000000000A003 /* HermesHistoryRewindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1049000000000000000A004 /* HermesHistoryRewindTests.swift */; };
 		E1011000000000000000A003 /* HermesChatRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1011000000000000000A004 /* HermesChatRequestTests.swift */; };
 		E1012000000000000000A003 /* HermesChatAttachmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1012000000000000000A004 /* HermesChatAttachmentTests.swift */; };
 		E1013000000000000000A003 /* HermesChatSideTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1013000000000000000A004 /* HermesChatSideTaskTests.swift */; };
@@ -842,6 +843,7 @@
 		E1047000000000000000A002 /* HermesTranscriptHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesTranscriptHistory.swift; sourceTree = "<group>"; };
 		E1010000000000000000A004 /* HermesChatTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatTurnTests.swift; sourceTree = "<group>"; };
 		E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesTranscriptPagingTests.swift; sourceTree = "<group>"; };
+		E1049000000000000000A004 /* HermesHistoryRewindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesHistoryRewindTests.swift; sourceTree = "<group>"; };
 		E1011000000000000000A002 /* HermesChatRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatRequests.swift; sourceTree = "<group>"; };
 		E1013000000000000000A002 /* HermesChatSideTasks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatSideTasks.swift; sourceTree = "<group>"; };
 		E1015000000000000000A004 /* HermesChatSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesChatSettings.swift; sourceTree = "<group>"; };
@@ -1466,6 +1468,7 @@
 					C04600000000000000000004 /* ChatStreamCoordinatorTests.swift */,
 					E1010000000000000000A004 /* HermesChatTurnTests.swift */,
 					E1047000000000000000A004 /* HermesTranscriptPagingTests.swift */,
+					E1049000000000000000A004 /* HermesHistoryRewindTests.swift */,
 					E1011000000000000000A004 /* HermesChatRequestTests.swift */,
 					E1012000000000000000A004 /* HermesChatAttachmentTests.swift */,
 					E1013000000000000000A004 /* HermesChatSideTaskTests.swift */,
@@ -2892,6 +2895,7 @@
 					C04600000000000000000003 /* ChatStreamCoordinatorTests.swift in Sources */,
 					E1010000000000000000A003 /* HermesChatTurnTests.swift in Sources */,
 					E1047000000000000000A003 /* HermesTranscriptPagingTests.swift in Sources */,
+					E1049000000000000000A003 /* HermesHistoryRewindTests.swift in Sources */,
 					E1011000000000000000A003 /* HermesChatRequestTests.swift in Sources */,
 					E1012000000000000000A003 /* HermesChatAttachmentTests.swift in Sources */,
 					E1013000000000000000A003 /* HermesChatSideTaskTests.swift in Sources */,

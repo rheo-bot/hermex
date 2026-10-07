@@ -646,8 +646,10 @@ private struct ChatTranscriptMessageBlock: View, Equatable {
     let onCopy: (MessageActionContext) -> Void
 
     // Equality over the value inputs only. The closures are pure functions of
-    // these values (e.g. `actionContext` is fully determined by
-    // `transcriptMessage`), so two blocks that compare equal render identically.
+    // these values (e.g. `actionContext` is determined by `transcriptMessage`,
+    // and in a Hermes session by the observed set of rows that can rewind, whose
+    // change invalidates the row itself), so two blocks that compare equal
+    // render identically.
     // This lets `.equatable()` skip re-evaluating rows whose data is unchanged
     // even though their closure props are recreated on every parent body pass.
     static func == (lhs: ChatTranscriptMessageBlock, rhs: ChatTranscriptMessageBlock) -> Bool {

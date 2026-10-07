@@ -63,9 +63,13 @@ enum HermesCall: Equatable, Sendable {
     case promptSubmit(sessionID: String, text: String)
     /// Cuts the transcript at one durable prompt row and starts the turn again with
     /// `text`, in one call under the host's history lock. Never `queued`: the host
-    /// refuses a cut while busy (4009) instead of queueing or steering it. Retry of
-    /// a failed turn (#878) uses it; edit and retry-from-here (#745) will too.
+    /// refuses a cut while busy (4009) instead of queueing or steering it. Bot Chat's
+    /// retry of a failed turn (#878) uses it, and so do a Hermes session's Edit,
+    /// Regenerate and `/retry` (#1049).
     case promptRewind(sessionID: String, text: String, beforeRowID: Int)
+    /// `/undo` in a Hermes session (#1049): rewinds the last real user turn on `runtime`
+    /// and answers `{removed}`. Refused while a turn runs (4009).
+    case sessionUndo(runtime: String)
     case sessionSteer(sessionID: String, text: String)
     case sessionRedirect(sessionID: String, text: String)
     case sessionInterrupt(sessionID: String)
@@ -243,6 +247,7 @@ enum HermesCall: Equatable, Sendable {
         case .sessionSteer: return "session.steer"
         case .sessionRedirect: return "session.redirect"
         case .sessionInterrupt: return "session.interrupt"
+        case .sessionUndo: return "session.undo"
         case .fileAttach: return "file.attach"
         case .promptBtw: return "prompt.btw"
         case .promptBackground: return "prompt.background"
@@ -303,7 +308,7 @@ enum HermesCall: Equatable, Sendable {
         case .sessionNew(let profile), .sessionMostRecent(let profile): return ["profile": .string(profile)]
         case .sessionTitle(let sessionID): return ["session_id": .string(sessionID), "title": .string(Self.botChatTitle)]
         case .sessionRename(let runtime, let title): return ["session_id": .string(runtime), "title": .string(title)]
-        case .sessionClose(let runtime): return ["session_id": .string(runtime)]
+        case .sessionClose(let runtime), .sessionUndo(let runtime): return ["session_id": .string(runtime)]
         case .sessionDelete(let profile, let storedKey): return ["session_id": .string(storedKey), "profile": .string(profile)]
         case .sessionResume(let profile, let sessionID, let omitMessages):
             var params: [String: BotJSON] = ["profile": .string(profile), "session_id": .string(sessionID),
@@ -425,7 +430,7 @@ enum HermesCall: Equatable, Sendable {
         case .profilesCreate(let profile): valid = profile.isAdmissible
         case .sessionCreate(let profile), .sessionNew(let profile), .sessionMostRecent(let profile): valid = !profile.isEmpty
         case .sessionTitle(let sessionID), .commandsCatalog(let sessionID), .subagentList(let sessionID),
-             .sessionClose(let sessionID):
+             .sessionClose(let sessionID), .sessionUndo(let sessionID):
             valid = !sessionID.isEmpty
         case .sessionRename(let runtime, let title):
             valid = !runtime.isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

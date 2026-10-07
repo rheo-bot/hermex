@@ -76,7 +76,8 @@ struct HermesChatTranscript: Equatable {
 /// `write`, never resent; a Send or Queue uploads its staged files first (#1012). The host's
 /// requests (approvals, questions, sudo and secret prompts) are `requests` (#1011); the goal,
 /// `/btw` and `/background` are `sideTasks` (#1013); its model and Profile chips are
-/// `settings` (#1015); its host's slash commands are `slashCommands` (#1036).
+/// `settings` (#1015); its host's slash commands are `slashCommands` (#1036). Edit,
+/// Regenerate, `/retry` and `/undo` cut the host's history (`rewind`, `undo`; #1049).
 ///
 /// A turn's identity is the stored key and the host's `turn_started_at`, in place of a
 /// webui stream id. A turn starts at `message.start`, an accepted send or a running
@@ -434,6 +435,69 @@ struct HermesChatTranscript: Equatable {
         queuedPrompt = nil
         requests.withdrawAll()
         return true
+    }
+
+    // MARK: Rewinds
+
+    /// Edit, Regenerate and `/retry` (#1049): one `prompt.submit` that cuts the transcript
+    /// before the saved prompt `rowID` and starts the turn again with `text`
+    /// (`HermesCall.promptRewind`). Sent once and never queued: a busy host refuses it (4009).
+    /// Once the host takes it, the history drops that row and every row after it, and the
+    /// turn starts as a send's does; its end re-reads the newest rows. Throws `NotSent` when it
+    /// never went out, the host's refusal as `BotSettingFailure`, and any other failure when
+    /// its reply was lost or unreadable, which only the next snapshot can settle.
+    func rewind(before rowID: Int, text: String) async throws {
+        submitsInFlight += 1
+        defer { submitsInFlight -= 1 }
+        await activate()
+        guard engine.connectionState == .connected, let runtime = engine.runtime else {
+            throw NotSent(underlying: BotFailure.transport)
+        }
+        let startsBefore = turnsStarted
+        isSubmittingSend = true
+        defer { isSubmittingSend = false }
+        let reply = try await writeOnce(.promptRewind(sessionID: runtime, text: text, beforeRowID: rowID), runtime: runtime)
+        // A cut only ever starts a turn; any other reply is a shape this build can't read.
+        guard reply["status"].text == "streaming" else { throw BotFailure.unsupported }
+        history.cut(before: rowID)
+        // The turn's own frames can land before this reply; start one only if none did.
+        if turnsStarted == startsBefore, activeStreamID == nil {
+            beginTurn(startedAt: nil, prompt: nil)
+            awaitingStart = true
+        }
+        requests.promptAccepted()
+    }
+
+    /// `/undo` (#1049): `session.undo` removes the session's last exchange, then the newest
+    /// rows are read again and replace the transcript. A host with nothing to undo removes
+    /// nothing, and nothing is read. Throws as `rewind` does.
+    func undo() async throws {
+        await activate()
+        guard engine.connectionState == .connected, let runtime = engine.runtime else {
+            throw NotSent(underlying: BotFailure.transport)
+        }
+        let attempt = engine.generation
+        let reply = try await writeOnce(.sessionUndo(runtime: runtime), runtime: runtime)
+        guard reply["removed"].integer != 0 else { return }
+        await readNewestRows(attempt: attempt)
+        guard attempt == engine.generation, isIdle else { return }
+        if let historyFailure {
+            delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: historyFailure, address: engine.connection.address))
+        } else {
+            delegate?.hermesReplaceTranscript(historyTranscript())
+        }
+    }
+
+    /// One history write on `runtime`, sent once. Throws `NotSent` when it never went out; a
+    /// reaped runtime (4001) also reattaches.
+    private func writeOnce(_ call: HermesCall, runtime: String) async throws -> BotJSON {
+        var dispatched = false
+        do {
+            return try await engine.write(call, attempt: engine.generation, runtime: runtime) { dispatched = true }
+        } catch {
+            if HermesChatSideTasks.isReaped(error) { reattach() }
+            throw dispatched ? error : NotSent(underlying: error)
+        }
     }
 
     // MARK: Turns

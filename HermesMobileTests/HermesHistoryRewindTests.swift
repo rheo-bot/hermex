@@ -1,0 +1,288 @@
+import XCTest
+import Observation
+@testable import HermesMobile
+
+/// Edit, Regenerate, `/retry` and `/undo` in a Hermes session (#1049), over #901's socket-level
+/// host and a scripted transcript page. A rewind is one truncating `prompt.submit` addressed by
+/// the prompt's REST row id; `/undo` is `session.undo`. Shapes are the pinned handlers'
+/// (`tui_gateway/methods_prompt.py` `prompt.submit`, `methods_session.py` `session.undo`).
+@MainActor final class HermesHistoryRewindTests: XCTestCase {
+    // MARK: Menu
+
+    /// A saved prompt offers Edit and its reply Regenerate. A turn whose prompt carried a file,
+    /// or one the host has not saved yet, offers neither, since a text-only resend would drop
+    /// the file and an unsaved row has no id to cut at. Fork From Here waits on #1051.
+    func testTheMenuRewindsOnlyAtSavedPromptsWithoutAttachments() async throws {
+        let chat = await openChat([
+            row(1, "user", "Summarize the logs"), row(2, "assistant", "Two errors."),
+            row(3, "user", "Use these\n\n@file:/a/notes.txt"), row(4, "assistant", "Read them.")
+        ])
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming")])))
+        _ = await chat.model.sendMessage("Run it")
+        chat.receive(event(1, "message.start"))
+        chat.receive(event(2, "message.complete", ["status": .string("complete"), "text": .string("Done.")]))
+        chat.receive(event(3, "session.info", ["running": .bool(false)]))
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Summarize the logs", "Two errors.", "Use these", "Read them.",
+                                                            "Run it", "Done."])
+
+        XCTAssertEqual(try menu(chat, at: 0), [.edit, .copy])
+        XCTAssertEqual(try menu(chat, at: 1), [.listen, .regenerate])
+        XCTAssertEqual(try menu(chat, at: 2), [.copy], "a prompt with a file")
+        XCTAssertEqual(try menu(chat, at: 3), [.listen], "the reply to it")
+        XCTAssertEqual(try menu(chat, at: 4), [.copy], "a prompt the host has not saved")
+        XCTAssertEqual(try menu(chat, at: 5), [.listen])
+    }
+
+    /// The discard warning counts the rows after the prompt, so it shows before a cut that
+    /// drops any.
+    func testTheDiscardWarningCountsTheRowsAfterThePrompt() async throws {
+        let chat = await openChat(threeTurns)
+        XCTAssertEqual(chat.model.transcriptMessagesAfter(try context(chat, at: 2)), 3)
+        XCTAssertEqual(chat.model.transcriptMessagesAfter(try context(chat, at: 5)), 0)
+    }
+
+    // MARK: Edit and Regenerate
+
+    /// Editing the second of three prompts sends one truncating submit at that prompt's row id
+    /// with the edited text. The later turns go once the host takes it, the reply streams, and
+    /// the newest-page re-read at its end gives the turn its saved rows.
+    func testEditCutsAtThePromptsRowAndTheTurnTakesItsSavedRows() async throws {
+        let chat = await openChat(threeTurns)
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming"), "user_row_id": .number(7)])))
+
+        let edited = await chat.model.editMessage(try context(chat, at: 2), newText: "  Second, edited  ")
+
+        XCTAssertTrue(edited)
+        XCTAssertEqual(chat.writes("prompt.submit"), [[
+            "session_id": .string("runtime"), "text": .string("Second, edited"), "truncate_before_row_id": .number(3),
+            "confirm_truncate": .bool(true), "confirm_empty_truncate": .bool(true)
+        ]])
+        XCTAssertEqual(chat.model.messages.map(\.content), ["First", "First answer.", "Second, edited"])
+        XCTAssertNotNil(chat.model.activeStreamID, "the new turn runs")
+
+        chat.receive(event(1, "message.start"))
+        chat.receive(event(2, "message.delta", ["text": .string("New answer.")]))
+        chat.receive(event(3, "message.complete", ["status": .string("complete"), "text": .string("New answer."),
+                                                   "persisted_turn": .object([
+                                                       "row_ids": .array([.number(7), .number(8)]), "complete": .bool(true),
+                                                       "user_row_id": .number(7), "final_assistant_row_id": .number(8)
+                                                   ])]))
+        chat.model.flushPendingStreamingContent()
+        XCTAssertEqual(chat.model.messages.map(\.content), ["First", "First answer.", "Second, edited", "New answer."])
+        chat.transcript.rows = [threeTurns[0], threeTurns[1], row(7, "user", "Second, edited"), row(8, "assistant", "New answer.")]
+        chat.receive(event(4, "session.info", ["running": .bool(false)]))
+        await waitUntil("saved rows") { chat.model.messages.last?.rowID == 8 }
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [1, 2, 7, 8])
+        XCTAssertEqual(chat.model.messages.map(\.content), ["First", "First answer.", "Second, edited", "New answer."])
+        XCTAssertEqual(chat.writes("prompt.submit").count, 1)
+    }
+
+    /// Regenerate resends the prompt before the reply, cut at that prompt's row.
+    func testRegenerateResendsThePromptBeforeTheReply() async throws {
+        let chat = await openChat(threeTurns)
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming")])))
+
+        let regenerated = await chat.model.regenerateAssistantResponse(try context(chat, at: 3))
+
+        XCTAssertTrue(regenerated)
+        XCTAssertEqual(chat.writes("prompt.submit").map { [$0["text"], $0["truncate_before_row_id"]] },
+                       [[.string("Second"), .number(3)]])
+        XCTAssertEqual(chat.model.messages.map(\.content), ["First", "First answer.", "Second"])
+    }
+
+    /// A skill turn's row holds the expanded skill and shows the typed line; regenerating resends
+    /// that line, which the host expands again.
+    func testASkillTurnResendsItsInvocation() async throws {
+        let skill = "[IMPORTANT: The user has invoked the \"demo-skill\" skill, indicating they want you to follow its "
+            + "instructions. The full skill content is loaded below.]\n\n---\nname: demo-skill\n---\nSay hello.\n\n"
+            + "[Skill directory: <skills>/demo-skill]\n\nThe user has provided the following instruction alongside the "
+            + "skill invocation: do it\n\n[Runtime note: Reply briefly.]"
+        let chat = await openChat([row(1, "user", skill), row(2, "assistant", "Hello.")])
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming")])))
+
+        _ = await chat.model.regenerateAssistantResponse(try context(chat, at: 1))
+
+        XCTAssertEqual(chat.writes("prompt.submit").map { $0["text"] }, [.string("/demo-skill do it")])
+    }
+
+    /// A busy host (4009), a row it can no longer cut (4018) and a failed write (5008, in the
+    /// host's words) each show their copy, cut nothing and send nothing again. The edit's text
+    /// goes back to the composer.
+    func testRefusalsShowTheirCopyAndCutNothing() async throws {
+        let chat = await openChat(threeTurns)
+        let refusals: [(Int, String, String)] = [
+            (4009, "session busy", "Wait for the current reply to finish."),
+            (4018, "target user message is no longer in session history", "This message can’t be changed any more."),
+            (5008, "failed to persist history truncation: database is locked",
+             "failed to persist history truncation: database is locked")
+        ]
+        for (attempt, (code, message, shown)) in refusals.enumerated() {
+            chat.host.next("prompt.submit", .init(error: code, message: message))
+            let edited = await chat.model.editMessage(try context(chat, at: 2), newText: "Second, edited")
+            XCTAssertFalse(edited, "\(code)")
+            XCTAssertEqual(chat.model.messageActionErrorMessage, shown, "\(code)")
+            XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [1, 2, 3, 4, 5, 6], "\(code)")
+            XCTAssertNil(chat.model.activeStreamID, "\(code)")
+            XCTAssertEqual(chat.writes("prompt.submit").count, attempt + 1, "\(code)")
+            XCTAssertEqual(chat.model.takeUnsentHermesEdit(), "Second, edited", "\(code)")
+            XCTAssertNil(chat.model.takeUnsentHermesEdit(), "taken once")
+            chat.model.clearMessageActionError()
+        }
+    }
+
+    /// An answer this build can't read may mean the host cut: the edit is never sent again
+    /// (#508), Send waits, and the reattach's newest-page read shows what the host did.
+    func testAnUnconfirmedRewindIsNeverSentAgain() async throws {
+        let chat = await openChat(threeTurns)
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("something new")])))
+        let target = try context(chat, at: 2)
+        chat.transcript.rows = [threeTurns[0], threeTurns[1], row(7, "user", "Second, edited")]
+
+        let edited = await chat.model.editMessage(target, newText: "Second, edited")
+
+        XCTAssertFalse(edited)
+        XCTAssertEqual(chat.model.messageActionErrorMessage, "The server did not confirm the change.")
+        XCTAssertEqual(chat.model.takeUnsentHermesEdit(), "Second, edited")
+        await waitUntil("reattached") { !chat.model.isHermesSubmissionUncertain }
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [1, 2, 7])
+        XCTAssertEqual(chat.writes("prompt.submit").count, 1)
+    }
+
+    // MARK: Slash commands
+
+    /// `/retry` regenerates the last reply: the last prompt again, cut at its row.
+    func testRetryResendsTheLastPrompt() async {
+        let chat = await openChat(threeTurns)
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming")])))
+
+        let result = await chat.model.runHermesSlashCommand("/retry")
+
+        XCTAssertEqual(result, .executed(message: nil))
+        XCTAssertEqual(chat.writes("prompt.submit").map { [$0["text"], $0["truncate_before_row_id"]] },
+                       [[.string("Third"), .number(5)]])
+        XCTAssertEqual(chat.model.messages.map(\.content), ["First", "First answer.", "Second", "Second answer.", "Third"])
+    }
+
+    /// `/retry` on a prompt that carried a file refuses, as its reply offers no Regenerate.
+    func testRetryRefusesAPromptWithAttachments() async {
+        let chat = await openChat([row(1, "user", "Use these\n\n@file:/a/notes.txt"), row(2, "assistant", "Read them.")])
+
+        let result = await chat.model.runHermesSlashCommand("/retry")
+
+        XCTAssertEqual(result, .notDelivered)
+        XCTAssertEqual(chat.model.sendErrorMessage, "This message can’t be changed any more.")
+        XCTAssertEqual(chat.writes("prompt.submit"), [])
+    }
+
+    /// `/undo` is `session.undo` on the runtime; the newest page re-read drops the exchange.
+    func testUndoRemovesTheLastExchange() async {
+        let chat = await openChat(threeTurns)
+        chat.host.always("session.undo", .init(result: .object(["removed": .number(2)])))
+        chat.transcript.rows = Array(threeTurns.prefix(4))
+
+        let result = await chat.model.runHermesSlashCommand("/undo")
+
+        XCTAssertEqual(result, .executed(message: nil))
+        XCTAssertEqual(chat.writes("session.undo"), [["session_id": .string("runtime")]])
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [1, 2, 3, 4])
+        XCTAssertEqual(chat.writes("slash.exec"), [], "never the host's own /undo")
+    }
+
+    // MARK: Fixture
+
+    private static let connection = BotConnection(id: UUID(), name: "Mac", address: URL(string: "http://hermes.local:9120")!,
+                                                  username: "user", password: "fixture")
+
+    private var threeTurns: [BotJSON] {
+        [row(1, "user", "First"), row(2, "assistant", "First answer."), row(3, "user", "Second"),
+         row(4, "assistant", "Second answer."), row(5, "user", "Third"), row(6, "assistant", "Third answer.")]
+    }
+
+    /// The session's transcript as its pages serve it: one short page, so every read is the whole session.
+    private final class Transcript: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [BotJSON]
+        init(_ rows: [BotJSON]) { stored = rows }
+        var rows: [BotJSON] {
+            get { lock.withLock { stored } }
+            set { lock.withLock { stored = newValue } }
+        }
+    }
+
+    private struct Chat {
+        let model: ChatViewModel
+        let host: BotSocketHost
+        let client: BotClient
+        let transcript: Transcript
+
+        @MainActor func receive(_ frame: BotJSON) { client.onEvent?(frame) }
+
+        func writes(_ method: String) -> [[String: BotJSON]] {
+            host.requests.filter { $0["method"].text == method }.compactMap { $0["params"].fields }
+        }
+    }
+
+    /// A chat attached to an idle session `tip` on runtime `runtime`, whose settled rows are `rows`.
+    private func openChat(_ rows: [BotJSON]) async -> Chat {
+        addTeardownBlock { HermesHostFixture.reset() }
+        let host = BotSocketHost()
+        host.always("session.resume", .init(result: .object([
+            "session_id": .string("runtime"), "session_key": .string("tip"), "running": .bool(false),
+            "messages": .array([]), "info": .object(["profile_name": .string("default")])
+        ])))
+        host.always("session.events.since", .init(result: BotFixtureWire.replay(latest: 0)))
+        let client = BotClient(http: host.connection(Self.connection))
+        let transcript = Transcript(rows)
+        _ = HermesHostFixture.configuration { request in
+            guard request.url?.path == "/api/sessions/tip/messages" else { return nil }
+            return .json(200, .object(["session_id": .string("tip"), "messages": .array(transcript.rows)]))
+        }
+        let engine = HermesConversation(server: URL(string: "https://hermes.example")!, connection: Self.connection,
+                                        target: .session(profile: "default", key: "tip"), wire: client)
+        let model = ChatViewModel(
+            session: SessionSummary(profile: "default"), server: URL(string: "https://hermes.example")!,
+            streamingScrollCoalescingDelayNanoseconds: 0,
+            draftStore: ChatDraftStore(persistence: BotMemoryDrafts(), debounceDuration: .seconds(60)),
+            backend: .hermes(HermesChatTurnCoordinator(engine: engine, isNetworkAvailable: { true }))
+        )
+        await model.loadMessages()
+        XCTAssertEqual(engine.connectionState, .connected)
+        return Chat(model: model, host: host, client: client, transcript: transcript)
+    }
+
+    private func context(_ chat: Chat, at index: Int) throws -> MessageActionContext {
+        try XCTUnwrap(chat.model.actionContext(for: chat.model.messages[index], visibleIndex: index))
+    }
+
+    /// The long-press menu of the row at `index`, by kind.
+    private func menu(_ chat: Chat, at index: Int) throws -> [ChatMessageActionItem.Kind] {
+        ChatMessageActionMenu(
+            context: try context(chat, at: index), listeningMessageID: nil, isViewingCachedData: false,
+            hasActiveStream: false, isRegeneratingMessage: false, isEditingMessage: false, isForkingMessage: false,
+            onToggleListening: { _ in }, onRegenerate: { _ in }, onEdit: { _ in }, onFork: { _ in }, onCopy: { _ in }
+        ).items.map(\.kind)
+    }
+
+    /// One display row as the transcript handler returns it.
+    private func row(_ id: Int, _ role: String, _ content: String) -> BotJSON {
+        .object(["id": .number(Double(id)), "session_id": .string("tip"), "role": .string(role), "content": .string(content),
+                 "timestamp": .number(1_790_000_000 + Double(id)), "active": .number(1), "compacted": .number(0)])
+    }
+
+    private func event(_ seq: Int, _ type: String, _ payload: [String: BotJSON] = [:]) -> BotJSON {
+        .object(["session_id": .string("runtime"), "seq": .number(Double(seq)), "type": .string(type),
+                 "payload": .object(payload)])
+    }
+
+    /// Waits on observation, never a clock, until `condition` holds.
+    private func waitUntil(_ description: String, file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping @MainActor () -> Bool) async {
+        while !condition() {
+            let changed = XCTestExpectation(description: description)
+            withObservationTracking { _ = condition() } onChange: { changed.fulfill() }
+            guard await XCTWaiter().fulfillment(of: [changed], timeout: 5) == .completed else {
+                return XCTFail("Nothing changed while waiting for: \(description)", file: file, line: line)
+            }
+        }
+    }
+}

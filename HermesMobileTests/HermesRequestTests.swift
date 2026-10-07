@@ -63,6 +63,7 @@ final class HermesRequestTests: XCTestCase {
             (.sessionSteer(sessionID: "runtime", text: "hi"), "session.steer", ["session_id": .string("runtime"), "text": .string("hi")]),
             (.sessionRedirect(sessionID: "runtime", text: "hi"), "session.redirect", ["session_id": .string("runtime"), "text": .string("hi")]),
             (.sessionInterrupt(sessionID: "runtime"), "session.interrupt", ["session_id": .string("runtime")]),
+            (.sessionUndo(runtime: "runtime"), "session.undo", ["session_id": .string("runtime")]),
             (.promptBtw(sessionID: "runtime", text: "why?"), "prompt.btw", ["session_id": .string("runtime"), "text": .string("why?")]),
             (.promptBackground(sessionID: "runtime", text: "sum up"), "prompt.background",
              ["session_id": .string("runtime"), "text": .string("sum up")]),

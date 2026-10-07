@@ -219,8 +219,14 @@ final class ChatViewModel {
     private static let messagePageLimit = 50
 
     private(set) var messages: [ChatMessage] = [] {
-        didSet { recomputeDisplayedTranscriptMessages() }
+        didSet {
+            recomputeDisplayedTranscriptMessages()
+            if hermesTurn != nil { updateHermesRewindableMessageIDs() }
+        }
     }
+    /// A Hermes session's rows that offer Edit or Regenerate (#1049). Reassigned only when
+    /// the set changes, so a stream tick leaves every row's menu alone.
+    private var hermesRewindableMessageIDs: Set<String> = []
     /// The message ↑ brings back into an empty composer. Computed on demand:
     /// the composer asks only when ↑ is pressed.
     var lastSentText: String? { ComposerRecall.lastSentText(in: messages) }
@@ -2053,8 +2059,16 @@ final class ChatViewModel {
             message: message,
             visibleIndex: visibleIndex,
             messagesOffset: messagesOffset,
-            offersHistoryActions: hermesTurn == nil
+            offersHistoryActions: hermesTurn == nil || hermesRewindableMessageIDs.contains(message.id),
+            offersFork: hermesTurn == nil
         )
+    }
+
+    /// How many transcript rows follow `context`'s row: what an edit or a regenerate discards,
+    /// which its confirmation counts. Rows match by message, never by their positional render id.
+    func transcriptMessagesAfter(_ context: MessageActionContext) -> Int {
+        guard let index = displayedTranscriptMessages.firstIndex(where: { $0.message.id == context.messageID }) else { return 0 }
+        return max(0, displayedTranscriptMessages.count - 1 - index)
     }
 
     nonisolated static func precedingUserMessageText(
@@ -4687,6 +4701,8 @@ final class ChatViewModel {
             return .unsupported(friendlyMessage: String(localized: "Wait for the current response to finish before undoing messages."))
         }
 
+        if let hermesTurn { return await undoHermesExchange(on: hermesTurn) }
+
         guard let sessionID else {
             return .unsupported(friendlyMessage: String(localized: "The server did not provide a session ID."))
         }
@@ -4724,6 +4740,8 @@ final class ChatViewModel {
         guard activeStreamID == nil else {
             return .unsupported(friendlyMessage: String(localized: "Wait for the current response to finish before retrying messages."))
         }
+
+        if let hermesTurn { return await retryHermesTurn(on: hermesTurn) }
 
         guard let sessionID else {
             return .unsupported(friendlyMessage: String(localized: "The server did not provide a session ID."))
@@ -5039,7 +5057,15 @@ final class ChatViewModel {
     }
 
     /// Edit a user message: truncate to just before the selected message, then send the edited text.
+    /// A Hermes session cuts and resends in one call (#1049), and an edit that fails there waits in
+    /// `takeUnsentHermesEdit()` for the composer.
     func editMessage(_ context: MessageActionContext, newText: String, modelContext: ModelContext? = nil) async -> Bool {
+        var edited = false
+        defer {
+            let text = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if hermesTurn != nil, !edited, !text.isEmpty { unsentHermesEdit = text }
+        }
+
         guard context.role == .user else {
             messageActionErrorMessage = String(localized: "Only user messages can be edited.")
             return false
@@ -5053,6 +5079,11 @@ final class ChatViewModel {
         guard activeStreamID == nil else {
             messageActionErrorMessage = String(localized: "Wait for the current response to finish before editing.")
             return false
+        }
+
+        if let hermesTurn {
+            edited = await editHermesMessage(context, newText: newText, on: hermesTurn)
+            return edited
         }
 
         guard let sessionID else {
@@ -5164,6 +5195,8 @@ final class ChatViewModel {
             return false
         }
 
+        if let hermesTurn { return await regenerateHermesResponse(context, on: hermesTurn) }
+
         guard let sessionID else {
             messageActionErrorMessage = String(localized: "The server did not provide a session ID.")
             return false
@@ -5239,6 +5272,168 @@ final class ChatViewModel {
             messageActionErrorMessage = error.localizedDescription
             return false
         }
+    }
+
+    // MARK: Hermes history rewinds (#1049)
+
+    /// A Hermes edit that did not go through, until `ChatView` puts it back in the composer.
+    @ObservationIgnored private var unsentHermesEdit: String?
+
+    /// Takes the text of a Hermes edit that did not go through, so the composer keeps it.
+    func takeUnsentHermesEdit() -> String? {
+        defer { unsentHermesEdit = nil }
+        return unsentHermesEdit
+    }
+
+    private func editHermesMessage(_ context: MessageActionContext, newText: String,
+                                   on hermes: HermesChatTurnCoordinator) async -> Bool {
+        let text = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            messageActionErrorMessage = String(localized: "The edited message cannot be empty.")
+            return false
+        }
+        guard let rowID = hermesRewindPrompt(for: context)?.rowID else {
+            messageActionErrorMessage = String(localized: "This message can’t be changed any more.")
+            return false
+        }
+        isEditingMessage = true
+        defer { isEditingMessage = false }
+        messageActionErrorMessage = await rewindHermesTranscript(
+            before: rowID, sending: text, on: hermes, reconnect: String(localized: "Reconnect to the server to edit a message.")
+        )
+        return messageActionErrorMessage == nil
+    }
+
+    private func regenerateHermesResponse(_ context: MessageActionContext, on hermes: HermesChatTurnCoordinator) async -> Bool {
+        guard let prompt = hermesRewindPrompt(for: context), let rowID = prompt.rowID else {
+            messageActionErrorMessage = String(localized: "This message can’t be changed any more.")
+            return false
+        }
+        isRegeneratingMessage = true
+        stopListening()
+        defer { isRegeneratingMessage = false }
+        messageActionErrorMessage = await rewindHermesTranscript(
+            before: rowID, sending: Self.hermesPromptText(prompt), on: hermes,
+            reconnect: String(localized: "Reconnect to the server to regenerate a response.")
+        )
+        return messageActionErrorMessage == nil
+    }
+
+    /// `/retry`: the last prompt again, cut at its row, as Regenerate on its reply.
+    private func retryHermesTurn(on hermes: HermesChatTurnCoordinator) async -> SlashCommandExecutionResult {
+        guard let prompt = messages.last(where: Self.opensHermesTurn) else {
+            return notDelivered(String(localized: "Send a message first, then run /\("retry")."))
+        }
+        guard Self.isHermesRewindable(prompt), let rowID = prompt.rowID else {
+            return notDelivered(String(localized: "This message can’t be changed any more."))
+        }
+        isRegeneratingMessage = true
+        stopListening()
+        defer { isRegeneratingMessage = false }
+        if let failure = await rewindHermesTranscript(before: rowID, sending: Self.hermesPromptText(prompt), on: hermes,
+                                                      reconnect: String(localized: "Reconnect to the server to retry messages.")) {
+            return notDelivered(failure)
+        }
+        return .executed(message: nil)
+    }
+
+    /// `/undo`: `session.undo` on the runtime, then the newest rows replace the transcript.
+    private func undoHermesExchange(on hermes: HermesChatTurnCoordinator) async -> SlashCommandExecutionResult {
+        let reconnect = String(localized: "Reconnect to the server to undo messages.")
+        guard !isHermesSubmissionUncertain else { return notDelivered(reconnect) }
+        sendErrorMessage = nil
+        do {
+            try await hermes.undo()
+            return .executed(message: nil)
+        } catch {
+            return notDelivered(hermesHistoryFailure(error, on: hermes, reconnect: reconnect))
+        }
+    }
+
+    /// Cuts a Hermes session's transcript before the saved prompt `rowID` and sends `text` in
+    /// its place, once. Once the host takes it, the prompt shows where the cut was, the rows and
+    /// cards it replaced go, and the turn streams after it; the turn's end re-reads the newest
+    /// rows. Returns why it failed, with nothing cut, or nil.
+    private func rewindHermesTranscript(before rowID: Int, sending text: String, on hermes: HermesChatTurnCoordinator,
+                                        reconnect: String) async -> String? {
+        guard !isHermesSubmissionUncertain else { return reconnect }
+        sendErrorMessage = nil
+        lastError = nil
+        let cut = messages.firstIndex { $0.rowID == rowID }.map { Set(messages[$0...].map(\.id)) } ?? []
+        isStartingChat = true
+        defer { isStartingChat = false }
+        do {
+            try await hermes.rewind(before: rowID, text: text)
+        } catch {
+            return hermesHistoryFailure(error, on: hermes, reconnect: reconnect)
+        }
+        // Rows the turn's first frames added stay after the prompt.
+        let start = messages.firstIndex { cut.contains($0.id) } ?? messages.endIndex
+        var next = messages.filter { !cut.contains($0.id) }
+        next.insert(ChatMessage(role: "user", content: text, timestamp: Date().timeIntervalSince1970,
+                                messageId: "local-\(UUID().uuidString)"), at: min(start, next.endIndex))
+        messages = next
+        transcriptRevision &+= 1
+        // A card without an anchor follows the last row, which the cut always takes.
+        setCompletedToolCallGroups(completedToolCallGroups.filter { $0.anchorMessageID.map { !cut.contains($0) } ?? false })
+        completedReasoningGroups = completedReasoningGroups.filter { $0.anchorMessageID.map { !cut.contains($0) } ?? false }
+        return nil
+    }
+
+    /// Why a Hermes rewind or `/undo` failed. A refusal is the host's own message, except busy
+    /// (4009) and a row it can no longer cut (4018). An answer that was lost or unreadable may
+    /// have been taken: Send waits while the chat reattaches, so the transcript shows what
+    /// happened, and nothing is sent again (#508).
+    private func hermesHistoryFailure(_ error: Error, on hermes: HermesChatTurnCoordinator, reconnect: String) -> String {
+        switch error {
+        case is HermesChatTurnCoordinator.NotSent, BotSettingFailure.rejected(4001, _):
+            return reconnect
+        case BotSettingFailure.rejected(4009, _):
+            return String(localized: "Wait for the current reply to finish.")
+        case BotSettingFailure.rejected(4018, _):
+            return String(localized: "This message can’t be changed any more.")
+        case BotSettingFailure.rejected(_, let message):
+            return message
+        default:
+            holdForLostAnswer(hermes)
+            return String(localized: "The server did not confirm the change.")
+        }
+    }
+
+    /// The prompt a rewind from `context`'s row resends: the row itself for a prompt, its
+    /// turn's prompt for a reply. Nil when the host can't cut there.
+    private func hermesRewindPrompt(for context: MessageActionContext) -> ChatMessage? {
+        let index = messages.indices.contains(context.visibleIndex) && messages[context.visibleIndex].id == context.messageID
+            ? context.visibleIndex : messages.firstIndex { $0.id == context.messageID }
+        guard let index, let prompt = messages[...index].last(where: Self.opensHermesTurn),
+              Self.isHermesRewindable(prompt) else { return nil }
+        return prompt
+    }
+
+    private func updateHermesRewindableMessageIDs() {
+        var ids = Set<String>()
+        var rewindable = false
+        for message in messages {
+            if Self.opensHermesTurn(message) { rewindable = Self.isHermesRewindable(message) }
+            if rewindable, message.role == "assistant" || Self.opensHermesTurn(message) { ids.insert(message.id) }
+        }
+        if ids != hermesRewindableMessageIDs { hermesRewindableMessageIDs = ids }
+    }
+
+    /// A user row that opens a turn; a steer belongs to the turn it steers.
+    private nonisolated static func opensHermesTurn(_ message: ChatMessage) -> Bool {
+        message.role == "user" && !message.isSteerMessage
+    }
+
+    /// A prompt the host can cut at and resend: it has the host's `rowID`, and no attachments,
+    /// which a text-only resend would drop.
+    private nonisolated static func isHermesRewindable(_ prompt: ChatMessage) -> Bool {
+        prompt.rowID != nil && prompt.attachments?.isEmpty != false && !hermesPromptText(prompt).isEmpty
+    }
+
+    /// A prompt's text as it shows, which a skill turn's host expands again.
+    private nonisolated static func hermesPromptText(_ prompt: ChatMessage) -> String {
+        (prompt.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @discardableResult
@@ -7325,11 +7520,14 @@ struct MessageActionContext: Equatable, Identifiable {
     let messageID: String
     let copyText: String
     let listenText: String?
-    /// Regenerate, Edit and Fork rewrite the server's history; a Hermes session offers
-    /// them once #702 adds its history actions.
+    /// Regenerate and Edit rewrite the server's history. A Hermes session offers them only
+    /// where the host can cut (`ChatViewModel.hermesRewindableMessageIDs`, #1049).
     let offersHistoryActions: Bool
+    /// Fork From Here; a Hermes session offers it with #1051.
+    let offersFork: Bool
 
-    init?(message: ChatMessage, visibleIndex: Int, messagesOffset: Int?, offersHistoryActions: Bool = true) {
+    init?(message: ChatMessage, visibleIndex: Int, messagesOffset: Int?, offersHistoryActions: Bool = true,
+          offersFork: Bool = true) {
         guard visibleIndex >= 0 else { return nil }
 
         switch message.role {
@@ -7351,6 +7549,7 @@ struct MessageActionContext: Equatable, Identifiable {
         copyText = content
         listenText = role == .assistant ? SpeechTextNormalizer.normalizedAssistantText(content) : nil
         self.offersHistoryActions = offersHistoryActions
+        self.offersFork = offersFork
     }
 }
 

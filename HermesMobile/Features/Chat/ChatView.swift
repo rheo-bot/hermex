@@ -3606,6 +3606,10 @@ struct ChatView: View {
         if success {
             editDraft = ""
         }
+        if let unsent = viewModel.takeUnsentHermesEdit() {
+            restoreUnsentEdit(unsent)
+            editDraft = ""
+        }
 
         if let lastError = viewModel.lastError {
             onAPIError(lastError)
@@ -3633,16 +3637,30 @@ struct ChatView: View {
         }
     }
 
+    /// Puts a Hermes edit that did not go through back in the composer (#1049), after any draft
+    /// already there, so neither is lost.
+    private func restoreUnsentEdit(_ text: String) {
+        let draft = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : "\(draftMessage)\n\n\(text)"
+        draftMessage = draft
+        persistDraftEdit(draft)
+    }
+
     private var editDiscardWarningMessage: String {
         guard let context = editContext else { return "" }
         let messagesAfter = transcriptMessagesAfter(context)
-        return String(localized: "Editing this message will discard \(messagesAfter) later messages.")
+        return withHermesCutNote(String(localized: "Editing this message will discard \(messagesAfter) later messages."))
     }
 
     private var regenerateDiscardWarningMessage: String {
         guard let context = regenerateContext else { return "" }
         let messagesAfter = transcriptMessagesAfter(context)
-        return String(localized: "Regenerating this response will discard \(messagesAfter) later messages.")
+        return withHermesCutNote(String(localized: "Regenerating this response will discard \(messagesAfter) later messages."))
+    }
+
+    /// A Hermes host's cut is permanent and every app sees it (#1049), so its warning says so.
+    private func withHermesCutNote(_ warning: String) -> String {
+        guard isHermesSession else { return warning }
+        return warning + "\n\n" + String(localized: "The Hermes host removes them for every app. It can't be undone.")
     }
 
     private var profileSwitchWarningMessage: String {
@@ -3654,11 +3672,7 @@ struct ChatView: View {
     }
 
     private func transcriptMessagesAfter(_ context: MessageActionContext) -> Int {
-        guard let index = transcriptMessages.firstIndex(where: { $0.id == context.messageID }) else {
-            return 0
-        }
-
-        return max(0, transcriptMessages.count - 1 - index)
+        viewModel.transcriptMessagesAfter(context)
     }
 }
 

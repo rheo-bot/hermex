@@ -344,6 +344,28 @@ temporary entries are the inbox's "New Session" and "Sessions" (DEBUG and Hermex
 Sessions list on Hermes below), on the server's picked Profile or the dashboard's
 `/api/profiles/active` `current`, until #709's bottom bar.
 
+Edit Message, Regenerate Response and `/retry` rewind the session (#1049): one
+`prompt.submit {session_id: <runtime>, text, truncate_before_row_id, confirm_truncate: true,
+confirm_empty_truncate: true}` (`HermesCall.promptRewind`, never `queued`, never an ordinal)
+cuts the host's transcript before the prompt's REST row `id` and starts the turn under its
+history lock. Edit sends the edited text; Regenerate and `/retry` (the last prompt) resend the
+prompt as it shows, so a `/skill` turn resends its typed line, which the host expands again.
+They are offered only at a prompt the host saved (it has a `rowID`) with no attachments, since
+a text-only resend would drop them, and on the replies after it; Fork From Here waits on #1051.
+Once the host answers `streaming`, the prompt shows where the cut was, the cut rows and their
+cards go, and the turn's end re-reads the newest rows. The dropped rows are soft-archived
+(`active=0`): no client shows them again and no call restores them, so the discard warning says
+so. `/undo` is `session.undo {session_id: <runtime>}` → `{removed}`, then a newest-page read
+replaces the transcript. 4009 (busy) asks to wait, 4018 (a row compacted or cut elsewhere) says
+the message can't be changed, and any other refusal shows the host's message (5008 is a failed
+write). Each is sent once: a lost or unreadable answer holds Send and reattaches, whose rebuild
+shows what the host did (#508). A failed edit's text goes back to the composer, after any draft.
+Checked against `scripts/local-hermes` at the `HERMES_AGENT_TESTED_SHA` pin (`ca678285`,
+0.21.5): a cut answers `{status: "streaming", user_row_id, survivor_user_row_ids}` and its rows
+leave the REST page; a cut row is 4018 afterwards; a running turn refuses both calls with 4009;
+`session.undo`'s `removed` counts rows (0 once nothing is left); and a `/skill` row's REST
+`content` is the expanded skill, which a rewind of the typed line stores again unchanged.
+
 Its goal, `/btw` and `/background` are `HermesChatSideTasks` (#1013); the main chat routes
 only these three `/` commands and sends any other `/` text as typed. Every goal verb and a
 new goal's text is `command.dispatch {name: "goal", arg}`: `exec` output shows as a notice,
@@ -1726,15 +1748,16 @@ Send resolves a draft that opens with `/name` in this order:
 
 1. **Hermex's own** (`SlashCommandCatalog.hermesCommands`): `/new`, `/stop`,
    `/model`, `/reasoning`, `/personality`, `/title`, `/goal`, `/btw`, `/bg` and
-   `/background`, and `/yolo` (the session's `config.set yolo`). Each keeps its
-   native path; an alias such as `/reset` resolves to its command first. `/title`
-   (#1048) is `session.title {session_id: <runtime>, title}`; the header takes the
-   title the host kept, and `session.info`'s `title` after that. A title in use or
-   too long is 4022 with the host's message, and the draft stays.
+   `/background`, `/retry` and `/undo`, and `/yolo` (the session's `config.set yolo`).
+   Each keeps its native path; an alias such as `/reset` resolves to its command first.
+   `/title` (#1048) is `session.title {session_id: <runtime>, title}`; the header takes
+   the title the host kept, and `session.info`'s `title` after that. A title in use or
+   too long is 4022 with the host's message, and the draft stays. `/retry` and `/undo`
+   (#1049) rewind the session as above, never through the host's `command.dispatch`,
+   whose retry still needs a follow-up submit.
 2. **Held until #702 slice 2.3** (`hermesHeldNames`): `/compress`, `/compact`,
-   `/undo`, `/retry`, `/clear`, `/branch`, `/fork`, `/resume`, `/sessions`. They
-   rewrite history or move between chats, so they show a notice naming #702 and
-   send nothing.
+   `/clear`, `/branch`, `/fork`, `/resume`, `/sessions`. They rewrite history or
+   move between chats, so they show a notice naming #702 and send nothing.
 3. **A catalog skill**: `command.dispatch` expands it and `message` is submitted.
 4. **Any other catalog command or alias**: `slash.exec {session_id, command}`
    with the typed line, once.

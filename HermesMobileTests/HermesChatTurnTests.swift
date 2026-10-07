@@ -409,18 +409,6 @@ import Observation
         XCTAssertEqual(HermesHostFixture.requests.last { $0.url?.path == "/api/profiles/active" }?.httpMethod, "GET")
     }
 
-    func testHermesSessionHidesHistoryActions() throws {
-        let reply = ChatMessage(role: "assistant", content: "Hi", timestamp: nil, messageId: "a")
-        let context = try XCTUnwrap(MessageActionContext(message: reply, visibleIndex: 0, messagesOffset: 0,
-                                                         offersHistoryActions: false))
-        let menu = ChatMessageActionMenu(
-            context: context, listeningMessageID: nil, isViewingCachedData: false, hasActiveStream: false,
-            isRegeneratingMessage: false, isEditingMessage: false, isForkingMessage: false,
-            onToggleListening: { _ in }, onRegenerate: { _ in }, onEdit: { _ in }, onFork: { _ in }, onCopy: { _ in }
-        )
-        XCTAssertEqual(menu.items.map(\.kind), [.listen])
-    }
-
     // MARK: Fixture
 
     private static let connection = BotConnection(id: UUID(), name: "Mac", address: URL(string: "http://hermes.local:9120")!,

@@ -74,6 +74,14 @@ struct HermesTranscriptHistory: Equatable {
         return !older.isEmpty
     }
 
+    /// Drops row `id` and every row after it, as the host's rewind did (#1049). The rows the
+    /// host saved since are unknown, so the next older page waits for a newest read.
+    mutating func cut(before id: Int) {
+        guard let index = rows.firstIndex(where: { Self.id($0) == id }) else { return }
+        replace(with: Array(rows[..<index]))
+        needsRecount = true
+    }
+
     private mutating func replace(with rows: [BotJSON]) {
         self.rows = rows
         ids = Set(rows.compactMap(Self.id))
