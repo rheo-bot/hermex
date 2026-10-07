@@ -1288,8 +1288,10 @@ no `pinned`, `unread`, `hidden` or `cwd`.
   `last_active ?? session_started` (a content match without the session's row has no
   `last_active`). A search stops paging, since it reads the whole Profile. A new query or
   Profile clears the host's matches at once; the same search running again, as when a chat
-  opened from them closes, keeps them until the host answers. A delete, archive, restore or
-  rename the host confirms shows on the matches too, since no list read refreshes them.
+  opened from them closes, keeps them until the host answers. A pin, delete, archive, restore
+  or rename the host confirms shows on the matches too, since no list read refreshes them, and
+  they follow the project lanes each list read brings. A search that ran before the list's
+  socket was attached (`.stale`, as when `/resume` opens a list searching) runs once it is.
 - **Snippets.** A content match (one with a `role`) carries FTS `snippet()` text with `>>>`
   and `<<<` around each match; `SessionSearchExcerpt(hermesSnippet:)` bolds those spans and
   never shows the marks. An id match's snippet is only its preview and shows nothing.

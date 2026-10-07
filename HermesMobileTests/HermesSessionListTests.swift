@@ -530,6 +530,64 @@ import Observation
         XCTAssertEqual(wire.searches.count, 1)
     }
 
+    /// A pin confirmed on an archived match shows on it: the list's pages never hold an
+    /// archived row, so no list read brings the pin back.
+    func testPinningAnArchivedMatchShowsThePin() async throws {
+        let wire = HermesSessionListWire()
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "gone", title: "Old launch", archived: true,
+                                                                              profile: "default"))]
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "launch", debounceNanoseconds: 0)
+        let match = try XCTUnwrap(list.visibleSessions(searchText: "launch", selectedProjectID: nil).first)
+
+        let pinned = await list.setPinned(true, for: match)
+
+        XCTAssertTrue(pinned)
+        XCTAssertEqual(wire.changes, [.pinned(true)])
+        XCTAssertEqual(list.visibleSessions(searchText: "launch", selectedProjectID: nil).map(\.pinned), [true])
+    }
+
+    /// A search that found the list's socket not yet attached, as a list opened searching
+    /// starts one, runs once the socket is, and says nothing went wrong meanwhile.
+    func testASearchBeforeTheSocketIsAttachedRunsOnceItIs() async {
+        let wire = HermesSessionListWire()
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old", profile: "default"))]
+        wire.holdsConnect = true
+        let list = makeList(wire)
+        let open = Task { await list.openHermes() }
+        await waitUntil("connecting") { wire.connects == 1 }
+
+        await list.searchSessions(query: "old", debounceNanoseconds: 0)
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: nil), [])
+        XCTAssertNil(list.searchErrorMessage)
+
+        wire.release()
+        await open.value
+
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: nil).compactMap(\.sessionId), ["old"])
+        XCTAssertEqual(wire.searches.map(\.query), ["old"])
+    }
+
+    /// The host's matches follow the project lanes as the list reads them again, so a match the
+    /// loaded pages lack shows in the lane that now claims it.
+    func testMatchesFollowTheProjectLanesReadAfterTheSearch() async {
+        let wire = HermesSessionListWire()
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old", profile: "default"))]
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "old", debounceNanoseconds: 0)
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: "p_1"), [])
+
+        wire.projectTree = .object(["projects": .array([.object([
+            "id": .string("p_1"), "label": .string("Launch"), "path": .string("/Users/me/launch"), "isAuto": .bool(false),
+            "isNoProject": .bool(false), "sessionCount": .number(1), "sessionIds": .array([.string("old")])
+        ])])])
+        await list.openHermes()
+
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: "p_1").compactMap(\.sessionId), ["old"])
+    }
+
     /// Clearing the search shows the loaded list again, without the host's matches or snippets.
     func testClearingTheSearchRestoresTheList() async {
         let wire = HermesSessionListWire()
@@ -611,7 +669,7 @@ import Observation
 
 /// A scripted Hermes host for the Sessions list: pages by Profile and offset, read marks and
 /// other changes, `session.active_list`, `profiles.list`, `session.most_recent`,
-/// `session.delete` and the search (#1053). A test
+/// `session.delete`, `projects.tree` and the search (#1053). A test
 /// can park page reads, read-mark writes or searches, and push gateway events.
 @MainActor @Observable final class HermesSessionListWire: BotTransport {
     struct UnreadWrite: Equatable { let key: String; let profile: String; let unread: Bool }
@@ -631,9 +689,15 @@ import Observation
     var unreadFails = false
     /// Thrown by the next page read instead of its page.
     var pageFailure: BotFailure?
-    /// What every search answers, whatever its query.
+    /// What every search answers, whatever its query. A search before `connect()` finishes is
+    /// refused as `BotClient`'s is, with `.stale`.
     var searchResults: [HermesSessionSearchResult] = []
     var holdsSearch = false
+    /// While true, `connect()` waits for `release()`.
+    var holdsConnect = false
+    /// `projects.tree`'s reply; nil refuses the call.
+    var projectTree: BotJSON?
+    private(set) var attached = false
     private(set) var searches: [(query: String, profile: String)] = []
     private(set) var connects = 0
     private(set) var pageReads: [(profile: String, offset: Int)] = []
@@ -644,7 +708,11 @@ import Observation
     private(set) var calls: [(method: String, profile: String?)] = []
     @ObservationIgnored private var held: [CheckedContinuation<Void, Never>] = []
 
-    func connect() async throws { connects += 1 }
+    func connect() async throws {
+        connects += 1
+        if holdsConnect { await withCheckedContinuation { held.append($0) } }
+        attached = true
+    }
     func close() {}
 
     func call(_ call: HermesCall, validateDispatch: (() throws -> Void)?) async throws -> BotJSON {
@@ -657,6 +725,9 @@ import Observation
         case "session.active_list": return .object(["sessions": .array(active)])
         case "profiles.list": return .object(["profiles": .array(profiles.map { .object(["name": .string($0)]) })])
         case "session.delete": return .object([:])
+        case "projects.tree":
+            guard let projectTree else { throw BotFailure.unsupported }
+            return projectTree
         default: throw BotFailure.unsupported
         }
     }
@@ -682,6 +753,7 @@ import Observation
     }
 
     func searchSessions(query: String, profile: String) async throws -> [HermesSessionSearchResult] {
+        guard attached else { throw BotFailure.stale }
         searches.append((query, profile))
         let reply = searchResults
         if holdsSearch { await withCheckedContinuation { held.append($0) } }

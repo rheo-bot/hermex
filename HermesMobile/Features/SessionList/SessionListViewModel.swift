@@ -196,6 +196,9 @@ final class SessionListViewModel {
     private var hermesSearchRows: [SessionSummary] = []
     /// Each content match's snippet, its `>>>`/`<<<` marks and all, by row identity.
     private var hermesSearchSnippets: [String: String] = [:]
+    /// A Hermes search that ran before the list's socket was attached, as one a list opened
+    /// searching starts; the list's next connect or refresh runs it.
+    @ObservationIgnored private var hermesSearchAwaitsConnect = false
 
     /// `hermes` makes this a Hermes server's list; nothing then reaches the webui API.
     init(server: URL, client: APIClient? = nil, unreadStore: SessionUnreadStore = SessionUnreadStore(),
@@ -576,6 +579,7 @@ final class SessionListViewModel {
 
             isSearchingRemoteSessions = false
             guard !isCancellationError(error) else { return }
+            if hermes != nil, error as? BotFailure == .stale { hermesSearchAwaitsConnect = true; return }
 
             remoteContentSearchSessionIDs = []
             remoteContentSearchExcerpts = [:]
@@ -1725,6 +1729,7 @@ final class SessionListViewModel {
         if let wire = hermesWire {
             if followed { _ = await watchHermesProfile(wire) }
             await reloadHermes()
+            await runAwaitedHermesSearch()
             await readHermesProfiles(wire)
             return
         }
@@ -1748,6 +1753,7 @@ final class SessionListViewModel {
             if await watchHermesProfile(wire) { _ = await moveOffRemovedHermesProfile(wire) }
             guard hermesWire === wire else { return }
             await reloadHermes()
+            await runAwaitedHermesSearch()
             await readHermesProfiles(wire)
         } catch {
             guard hermesWire === wire else { return }
@@ -2049,7 +2055,7 @@ final class SessionListViewModel {
     /// One search of the listed Profile for `query`, applied unless a newer search, a Profile
     /// switch or a new client replaced it meanwhile. False when it was replaced.
     private func searchHermes(_ query: String) async throws -> Bool {
-        guard let wire = hermesWire, let profile = hermesProfile else { throw BotFailure.transport }
+        guard let wire = hermesWire, let profile = hermesProfile else { throw BotFailure.stale }
         let results = try await wire.searchSessions(query: query, profile: profile)
         guard !Task.isCancelled, activeRemoteSearchQuery == query, hermesWire === wire, hermesProfile == profile else { return false }
         hermesSearchSnippets = Dictionary(results.compactMap { result in result.snippet.map { (result.row.identity, $0) } },
@@ -2058,23 +2064,34 @@ final class SessionListViewModel {
         return true
     }
 
+    /// Shows `results` as the search's matches, each in the project lane that now claims it, so
+    /// the lanes read after the search apply to it too.
     private func showHermesSearch(_ results: [HermesSessionRow], in profile: String) {
         hermesSearchResults = results
-        hermesSearchRows = results.map { $0.summary(in: profile, project: hermesProjectOwners[$0.id]) }
+        let rows = results.map { $0.summary(in: profile, project: hermesProjectOwners[$0.id]) }
+        if rows != hermesSearchRows { hermesSearchRows = rows }
     }
 
     /// Shows a write the host confirmed on the search's matches, which only a new search reads
-    /// again: a delete (`nil`) drops the match, and an archive, restore or rename shows on it.
+    /// again: a delete (`nil`) drops the match, and a pin, archive, restore or rename shows on it.
     private func applyToHermesSearch(_ change: HermesSessionChange?, key: String) {
         guard let profile = hermesProfile, let index = hermesSearchResults.firstIndex(where: { $0.id == key }) else { return }
         var results = hermesSearchResults
         switch change {
         case nil: results.remove(at: index)
+        case .pinned(let pinned)?: results[index].pinned = pinned
         case .archived(let archived)?: results[index].archived = archived
         case .title(let title)?: results[index].title = title
-        case .pinned?, .unread?: return
+        case .unread?: return
         }
         showHermesSearch(results, in: profile)
+    }
+
+    /// Runs the search that found the list's socket not yet attached, now that it is.
+    private func runAwaitedHermesSearch() async {
+        guard hermesSearchAwaitsConnect, let query = activeRemoteSearchQuery else { return }
+        hermesSearchAwaitsConnect = false
+        await searchSessions(query: query, debounceNanoseconds: 0)
     }
 
     /// The host's matches the local filter missed, in the host's order, so a pasted id's
@@ -2094,6 +2111,7 @@ final class SessionListViewModel {
     /// Writes only a real change, so clearing an empty search never invalidates the rows.
     private func clearHermesSearchMatches() {
         hermesSearchResults = []
+        hermesSearchAwaitsConnect = false
         if !hermesSearchRows.isEmpty { hermesSearchRows = [] }
         if !hermesSearchSnippets.isEmpty { hermesSearchSnippets = [:] }
     }
@@ -2383,6 +2401,7 @@ final class SessionListViewModel {
         hermesProjectOwners = tree.owners
         if projects != tree.projects { projects = tree.projects }
         showHermesPages(hermesPages, animation: nil)
+        showHermesSearch(hermesSearchResults, in: profile)
     }
 
     private func mutate(
