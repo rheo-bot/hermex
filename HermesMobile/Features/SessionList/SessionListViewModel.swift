@@ -2008,14 +2008,16 @@ final class SessionListViewModel {
     }
 
     /// Pins, archives or restores a row: shows the change at once, writes it, and puts the row
-    /// back if the host refuses. A list read already out predates the change, so it is dropped,
-    /// and the list reads again once the host has answered. When the list's client closed first
-    /// (`.stale`: the app left, or a screen was pushed), the write may have landed, so the row
-    /// stays as shown, unannounced, and the list's next read shows the host's.
+    /// back if the host refuses, unless the list moved to another Profile meanwhile. A list read
+    /// already out predates the change, so it is dropped, and the list reads again once the host
+    /// has answered. When the list's client closed first (`.stale`: the app left, or a screen
+    /// was pushed), the write may have landed, so the row stays as shown, unannounced, and the
+    /// list's next read shows the host's.
     private func changeHermesSession(_ session: SessionSummary, _ change: HermesSessionChange,
                                      animation: Animation?) async -> Bool {
         guard let target = hermesTarget(session), beginSessionMutation(target.key) else { return false }
         let (wire, key, profile) = target
+        let listed = hermesProfile
         defer { endSessionMutation(key) }
         actionErrorMessage = nil
         hermesReadSerial += 1
@@ -2028,7 +2030,7 @@ final class SessionListViewModel {
             return true
         } catch {
             let unknown = error as? BotFailure == .stale
-            if !unknown, let before {
+            if !unknown, hermesProfile == listed, let before {
                 var pages = hermesPages
                 pages.restore(before.row, at: before.index)
                 showHermesPages(pages, animation: animation)

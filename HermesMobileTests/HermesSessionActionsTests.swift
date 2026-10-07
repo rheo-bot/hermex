@@ -194,6 +194,39 @@ import Observation
         XCTAssertNil(list.actionErrorMessage)
     }
 
+    /// A pin the host refuses after the list moved to another Profile stays out of that
+    /// Profile's rows; the refusal is still shown.
+    func testARefusalAfterAProfileSwitchLeavesTheNewProfilesRows() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        _ = HermesHostFixture.configuration { request in
+            switch request.httpMethod {
+            case "PATCH": return .park
+            case "GET" where request.url?.path == "/api/sessions":
+                let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems ?? []
+                let ids = query.contains { $0.name == "profile" && $0.value == "research" } ? ["r"] : ["a", "b"]
+                return .json(200, .object(["sessions": .array(ids.map { .object(["id": .string($0)]) })]))
+            default: return nil
+            }
+        }
+        let parked = expectation(description: "pin parked")
+        HermesHostFixture.onPark = { parked.fulfill() }
+        let list = makeList(connection)
+        await list.openHermes()
+        let row = try XCTUnwrap(list.sessions.first { $0.sessionId == "a" })
+
+        let pin = Task { await list.setPinned(true, for: row) }
+        await fulfillment(of: [parked], timeout: 5)
+        await list.selectHermesProfile("research")
+        XCTAssertEqual(list.sessions.map(\.sessionId), ["r"])
+        HermesHostFixture.releaseParked(.json(500, .object(["detail": .string("database is locked")])))
+        let pinned = await pin.value
+
+        XCTAssertFalse(pinned)
+        XCTAssertEqual(list.sessions.map(\.sessionId), ["r"])
+        XCTAssertNotNil(list.actionErrorMessage)
+    }
+
     // MARK: Archived screen
 
     /// The Archived page keeps only archived rows: a hidden Bot Chat is listed under its bot's
@@ -269,6 +302,59 @@ import Observation
         XCTAssertEqual(archive.sessions.count, 100)
         XCTAssertEqual(archive.sessions.last?.sessionId, "s100")
         XCTAssertFalse(archive.sessions.contains { $0.sessionId == "s5" })
+    }
+
+    /// A refresh that lands while a restore waits, still listing the row, doesn't bring it
+    /// back, before or after the host takes the restore.
+    func testARefreshDuringARestoreDoesNotBringTheRowBack() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        let page = BotJSON.object(["sessions": .array(["a", "b", "c"].map { .object(["id": .string($0), "archived": .bool(true)]) })])
+        _ = HermesHostFixture.configuration { request in
+            switch request.httpMethod {
+            case "PATCH": return .park
+            case "GET" where request.url?.path == "/api/sessions": return .json(200, page)
+            default: return nil
+            }
+        }
+        let parked = expectation(description: "restore parked")
+        HermesHostFixture.onPark = { parked.fulfill() }
+        let archive = ArchivedSessionsViewModel(server: server, hermes: HermesArchiveSource(
+            connection: record, profile: "default", makeWire: { _ in BotClient(http: connection) }, preferences: defaults
+        ))
+        await archive.load()
+        let row = try XCTUnwrap(archive.sessions.first { $0.sessionId == "b" })
+
+        let restore = Task { await archive.unarchive(row) }
+        await fulfillment(of: [parked], timeout: 5)
+        await archive.load()
+        XCTAssertEqual(archive.sessions.map(\.sessionId), ["a", "c"])
+        HermesHostFixture.releaseParked(.json(200, .object(["ok": .bool(true), "title": .null, "archived": .bool(false)])))
+        let restored = await restore.value
+
+        XCTAssertTrue(restored)
+        XCTAssertEqual(archive.sessions.map(\.sessionId), ["a", "c"])
+    }
+
+    /// The app leaving while the Archived screen connects ends that load, and the client it
+    /// was connecting leaves too, so the screen reads afresh on return.
+    func testAConnectTheScreenClosedDuringLeavesNoClient() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        _ = HermesHostFixture.configuration { $0.url?.path == "/api/auth/ws-ticket" ? .park : nil }
+        let parked = expectation(description: "connect parked")
+        HermesHostFixture.onPark = { parked.fulfill() }
+        let archive = ArchivedSessionsViewModel(server: server, hermes: HermesArchiveSource(
+            connection: record, profile: "default", makeWire: { _ in BotClient(http: connection) }, preferences: defaults
+        ))
+
+        let load = Task { await archive.load() }
+        await fulfillment(of: [parked], timeout: 5)
+        archive.close()
+        HermesHostFixture.releaseParked()
+        await load.value
+
+        XCTAssertFalse(archive.isConnected)
     }
 
     // MARK: Export

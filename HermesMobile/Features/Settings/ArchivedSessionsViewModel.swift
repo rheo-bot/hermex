@@ -42,7 +42,8 @@ final class ArchivedSessionsViewModel {
     private let hermes: HermesArchiveSource?
     @ObservationIgnored private var wire: (any BotTransport)?
     @ObservationIgnored private var pages = HermesSessionPages(archived: true)
-    /// Bumped by each read, so only the newest one applies.
+    /// Bumped by each read, and by each restore or delete, so only a read that began after the
+    /// screen's last change applies.
     @ObservationIgnored private var readSerial = 0
 
     var isUnarchiving: Bool {
@@ -98,6 +99,8 @@ final class ArchivedSessionsViewModel {
             return false
         }
 
+        if hermes != nil { return await restoreHermes(session, key: sessionId) }
+
         guard let removedSession = removeSession(withID: sessionId) else {
             return false
         }
@@ -107,20 +110,6 @@ final class ArchivedSessionsViewModel {
         lastError = nil
         defer {
             unarchivingSessionIDs.remove(sessionId)
-        }
-
-        if hermes != nil {
-            do {
-                try await restoreHermes(session, key: sessionId)
-                return true
-            } catch {
-                // `.stale`: this screen closed before the host's answer was read, so the restore
-                // may have landed. The row stays gone, and the screen's next load shows the host's.
-                if error as? BotFailure == .stale { return false }
-                restore(removedSession)
-                if !Self.isCancellationError(error) { actionErrorMessage = hermesFailure(error) }
-                return false
-            }
         }
 
         do {
@@ -185,7 +174,7 @@ final class ArchivedSessionsViewModel {
             guard serial == readSerial, pages.nextOffset == offset else { return }
             var pages = self.pages
             pages.append(page)
-            show(pages, profile: profile)
+            show(pages)
         } catch {
             guard serial == readSerial, !Self.isCancellationError(error) else { return }
             actionErrorMessage = hermesFailure(error)
@@ -206,8 +195,9 @@ final class ArchivedSessionsViewModel {
                 actionErrorMessage = refusal
                 return false
             }
+            dropReads()
             pages.remove(sessionId)
-            sessions.removeAll { $0.sessionId == sessionId }
+            show(pages)
             return true
         } catch {
             if !Self.isCancellationError(error) { actionErrorMessage = hermesFailure(error) }
@@ -235,12 +225,12 @@ final class ArchivedSessionsViewModel {
         actionErrorMessage = nil
         defer { if serial == readSerial { isLoading = false } }
         do {
-            let wire = try await connectedWire(hermes)
+            let wire = try await connectedWire(hermes, for: serial)
             let profile = try await listedProfile(hermes, on: wire)
             var pages = HermesSessionPages(archived: true)
             pages.append(try await wire.sessionPage(profile: profile, offset: 0, archived: true))
             guard serial == readSerial else { return }
-            show(pages, profile: profile)
+            show(pages)
         } catch {
             guard serial == readSerial, !Task.isCancelled, !Self.isCancellationError(error) else { return }
             // A client the socket dropped is replaced on the next load.
@@ -250,8 +240,9 @@ final class ArchivedSessionsViewModel {
     }
 
     /// This screen's client on the socket, connecting it first. A client another load
-    /// connected meanwhile wins, and this one leaves.
-    private func connectedWire(_ hermes: HermesArchiveSource) async throws -> any BotTransport {
+    /// connected meanwhile wins, and this one leaves, as it does when the read that asked for it
+    /// ended meanwhile (`close()` on the background), so a later load connects afresh.
+    private func connectedWire(_ hermes: HermesArchiveSource, for serial: Int) async throws -> any BotTransport {
         if let wire { return wire }
         let wire = hermes.makeWire(hermes.connection)
         wire.onDisconnect = { [weak self, weak wire] _ in
@@ -259,6 +250,10 @@ final class ArchivedSessionsViewModel {
             self.wire = nil
         }
         try await wire.connect()
+        guard serial == readSerial else {
+            wire.close()
+            throw BotFailure.stale
+        }
         if let current = self.wire {
             wire.close()
             return current
@@ -282,16 +277,51 @@ final class ArchivedSessionsViewModel {
         return profile
     }
 
-    private func restoreHermes(_ session: SessionSummary, key: String) async throws {
-        guard let wire, let profile = Self.nonEmpty(session.profile) ?? hermesProfile else { throw BotFailure.transport }
-        try await wire.updateSession(.archived(false), key: key, profile: profile)
-        _ = pages.apply(.archived(false), to: key)
+    /// Restores an archived row: it leaves at once, and a refusal puts it back where it stood.
+    /// A read still out when the restore starts or ends could show it again, so it is dropped.
+    /// When this screen's client closed before the host's answer was read (`.stale`), the
+    /// restore may have landed: the row stays gone, and the screen's next load shows the host's.
+    private func restoreHermes(_ session: SessionSummary, key: String) async -> Bool {
+        guard let wire, let profile = Self.nonEmpty(session.profile) ?? hermesProfile else {
+            actionErrorMessage = hermesFailure(BotFailure.transport)
+            return false
+        }
+        unarchivingSessionIDs.insert(key)
+        actionErrorMessage = nil
+        defer { unarchivingSessionIDs.remove(key) }
+        dropReads()
+        let before = pages.apply(.archived(false), to: key)
+        show(pages)
+        do {
+            try await wire.updateSession(.archived(false), key: key, profile: profile)
+            dropReads()
+            _ = pages.apply(.archived(false), to: key)
+            show(pages)
+            return true
+        } catch {
+            if error as? BotFailure == .stale { return false }
+            if let before { pages.restore(before.row, at: before.index) }
+            unarchivingSessionIDs.remove(key)
+            show(pages)
+            if !Self.isCancellationError(error) { actionErrorMessage = hermesFailure(error) }
+            return false
+        }
     }
 
-    private func show(_ pages: HermesSessionPages, profile: String) {
+    /// Ends the reads still out, with their spinners: they began before a change this screen
+    /// made, so they could show a row it just restored or deleted.
+    private func dropReads() {
+        readSerial += 1
+        isLoading = false
+        isLoadingMore = false
+    }
+
+    /// Shows `pages`, less a row whose restore is still out.
+    private func show(_ pages: HermesSessionPages) {
         self.pages = pages
         if hasMore != pages.hasMore { hasMore = pages.hasMore }
-        let rows = pages.rows.map { $0.summary(in: profile) }
+        let profile = hermesProfile ?? ""
+        let rows = pages.rows.filter { !unarchivingSessionIDs.contains($0.id) }.map { $0.summary(in: profile) }
         if rows != sessions { sessions = rows }
     }
 
