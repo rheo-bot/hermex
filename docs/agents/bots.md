@@ -1288,16 +1288,18 @@ no `pinned`, `unread`, `hidden` or `cwd`.
   `last_active ?? session_started` (a content match without the session's row has no
   `last_active`). A search stops paging, since it reads the whole Profile. A new query or
   Profile clears the host's matches at once; the same search running again, as when a chat
-  opened from them closes, keeps them until the host answers.
+  opened from them closes, keeps them until the host answers. A delete, archive, restore or
+  rename the host confirms shows on the matches too, since no list read refreshes them.
 - **Snippets.** A content match (one with a `role`) carries FTS `snippet()` text with `>>>`
   and `<<<` around each match; `SessionSearchExcerpt(hermesSnippet:)` bolds those spans and
   never shows the marks. An id match's snippet is only its preview and shows nothing.
-- **Labels.** An archived match shows "Archived" and opens as a session; restoring stays on
-  the Archived screen. The payload has no `hidden`, so a match titled exactly "Bot Chat" is
-  that Profile's canonical Bot Chat ("Bot Chat · <Profile>"); it opens in its bot through the
-  bot deep-link route (`AppIntentRouter`, then `ContentView`'s `pendingBotDestination`), which
-  first pops the inbox's pushed screens so the inbox can resolve it. It offers no pin, rename,
-  move, archive or delete: it belongs to its bot, and `pinned: true` would also unhide it.
+- **Labels.** An archived match shows "Archived", opens as a session and offers no Archive;
+  restoring stays on the Archived screen. The payload has no `hidden`, so a match titled
+  exactly "Bot Chat" is that Profile's canonical Bot Chat ("Bot Chat · <Profile>"); it opens
+  in its bot through the bot deep-link route (`AppIntentRouter`, then `ContentView`'s
+  `pendingBotDestination`), which first pops the inbox's pushed screens so the inbox can
+  resolve it. It offers no pin, rename, move, archive, delete or read mark: it belongs to its
+  bot, whose inbox keeps its own read mark, and `pinned: true` would also unhide it.
 
 Checked against `scripts/local-hermes` at the pin: `hermes_cli/web_routers/sessions.py`
 (`search_sessions`) and `hermes_state_search.py` (`search_sessions_by_id`, `_fts_match_sql`).

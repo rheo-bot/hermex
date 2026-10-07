@@ -188,8 +188,11 @@ final class SessionListViewModel {
     @ObservationIgnored private var hermesProjectsRead = false
     /// The host's reason for refusing the open project sheet's create or rename (#1052).
     private(set) var projectSheetErrorMessage: String?
-    /// The host's matches for the active search on a Hermes list (#1053), in its order, each a
-    /// row built from the result's own fields; a loaded row shows in its place.
+    /// The host's matches for the active search on a Hermes list (#1053), in its order, as it
+    /// answered but for the deletes, archives, restores and renames this phone made since.
+    @ObservationIgnored private var hermesSearchResults: [HermesSessionRow] = []
+    /// `hermesSearchResults` as rows built from the results' own fields; a loaded row shows in
+    /// its place.
     private var hermesSearchRows: [SessionSummary] = []
     /// Each content match's snippet, its `>>>`/`<<<` marks and all, by row identity.
     private var hermesSearchSnippets: [String: String] = [:]
@@ -671,8 +674,9 @@ final class SessionListViewModel {
         return timestamp > seen
     }
 
+    /// Not on a Bot Chat a Hermes search lists (#1053): the Bots inbox keeps its own read mark.
     func canToggleUnread(_ session: SessionSummary) -> Bool {
-        if session.hermes != nil { return Self.nonEmpty(session.sessionId) != nil }
+        if let hermes = session.hermes { return !hermes.isBotChat && Self.nonEmpty(session.sessionId) != nil }
         return Self.nonEmpty(session.sessionId) != nil
             && Self.messageTime(for: session) != nil
             && !SessionRowView.isActiveStreaming(session)
@@ -2048,10 +2052,29 @@ final class SessionListViewModel {
         guard let wire = hermesWire, let profile = hermesProfile else { throw BotFailure.transport }
         let results = try await wire.searchSessions(query: query, profile: profile)
         guard !Task.isCancelled, activeRemoteSearchQuery == query, hermesWire === wire, hermesProfile == profile else { return false }
-        hermesSearchRows = results.map { $0.row.summary(in: profile, project: hermesProjectOwners[$0.row.id]) }
         hermesSearchSnippets = Dictionary(results.compactMap { result in result.snippet.map { (result.row.identity, $0) } },
                                           uniquingKeysWith: { first, _ in first })
+        showHermesSearch(results.map(\.row), in: profile)
         return true
+    }
+
+    private func showHermesSearch(_ results: [HermesSessionRow], in profile: String) {
+        hermesSearchResults = results
+        hermesSearchRows = results.map { $0.summary(in: profile, project: hermesProjectOwners[$0.id]) }
+    }
+
+    /// Shows a write the host confirmed on the search's matches, which only a new search reads
+    /// again: a delete (`nil`) drops the match, and an archive, restore or rename shows on it.
+    private func applyToHermesSearch(_ change: HermesSessionChange?, key: String) {
+        guard let profile = hermesProfile, let index = hermesSearchResults.firstIndex(where: { $0.id == key }) else { return }
+        var results = hermesSearchResults
+        switch change {
+        case nil: results.remove(at: index)
+        case .archived(let archived)?: results[index].archived = archived
+        case .title(let title)?: results[index].title = title
+        case .pinned?, .unread?: return
+        }
+        showHermesSearch(results, in: profile)
     }
 
     /// The host's matches the local filter missed, in the host's order, so a pasted id's
@@ -2070,6 +2093,7 @@ final class SessionListViewModel {
 
     /// Writes only a real change, so clearing an empty search never invalidates the rows.
     private func clearHermesSearchMatches() {
+        hermesSearchResults = []
         if !hermesSearchRows.isEmpty { hermesSearchRows = [] }
         if !hermesSearchSnippets.isEmpty { hermesSearchSnippets = [:] }
     }
@@ -2112,6 +2136,7 @@ final class SessionListViewModel {
         showHermesPages(pages, animation: animation)
         do {
             try await wire.updateSession(change, key: key, profile: profile)
+            applyToHermesSearch(change, key: key)
             requestHermesReload()
             return true
         } catch {
@@ -2144,6 +2169,7 @@ final class SessionListViewModel {
             var pages = hermesPages
             pages.remove(key)
             showHermesPages(pages, animation: animation)
+            applyToHermesSearch(nil, key: key)
             requestHermesReload()
             return true
         } catch {
@@ -2170,10 +2196,12 @@ final class SessionListViewModel {
         defer { isRenamingSession = false }
         do {
             let kept = try await wire.updateSession(.title(title), key: key, profile: profile)
+            let change = HermesSessionChange.title(Self.nonEmpty(kept) ?? title)
             hermesReadSerial += 1
             var pages = hermesPages
-            _ = pages.apply(.title(Self.nonEmpty(kept) ?? title), to: key)
+            _ = pages.apply(change, to: key)
             showHermesPages(pages, animation: nil)
+            applyToHermesSearch(change, key: key)
             requestHermesReload()
             return true
         } catch {

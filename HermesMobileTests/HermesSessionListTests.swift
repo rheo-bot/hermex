@@ -492,12 +492,42 @@ import Observation
         XCTAssertEqual(archived.hermesTarget(listedIn: "default"), .session(profile: "default", key: "gone"))
         XCTAssertNil(archived.hermesBot(on: server, connectionID: connection.id))
         XCTAssertTrue(SessionRowActionPolicy.offersMutationActions(for: archived))
+        XCTAssertFalse(SessionRowActionPolicy.offersArchive(for: archived), "the Archived screen restores it")
 
         let bot = try XCTUnwrap(shown.first { $0.sessionId == "bot" })
         XCTAssertEqual(SessionRowView.displayTitle(for: bot), "Bot Chat · default")
         XCTAssertEqual(bot.hermesBot(on: server, connectionID: connection.id),
                        BotDestination(server: server, connectionID: connection.id, profile: "default"))
         XCTAssertFalse(SessionRowActionPolicy.offersMutationActions(for: bot), "pinning would unhide it")
+        XCTAssertFalse(list.canToggleUnread(bot), "the Bots inbox keeps its own read mark")
+        XCTAssertTrue(list.canToggleUnread(archived))
+    }
+
+    /// No list read refreshes the host's matches, so a delete, archive or rename confirmed here
+    /// shows on them: the deleted match leaves, the archived one is labeled, the renamed one
+    /// shows its new title, and the host is not searched again.
+    func testAMatchChangedHereShowsTheChange() async throws {
+        let wire = HermesSessionListWire()
+        wire.searchResults = ["gone", "old", "draft"].map { id in
+            HermesSessionSearchResult(row: HermesSessionRow(id: id, title: "Plan \(id)", profile: "default"), snippet: ">>>nimbus<<<")
+        }
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "nimbus", debounceNanoseconds: 0)
+        let shown = list.visibleSessions(searchText: "nimbus", selectedProjectID: nil)
+        XCTAssertEqual(shown.compactMap(\.sessionId), ["gone", "old", "draft"])
+
+        let deleted = await list.delete(shown[0])
+        let archived = await list.archive(shown[1])
+        let renamed = await list.rename(shown[2], to: "Nimbus draft")
+
+        XCTAssertEqual([deleted, archived, renamed], [true, true, true])
+        XCTAssertEqual(wire.changes, [.archived(true), .title("Nimbus draft")])
+        let after = list.visibleSessions(searchText: "nimbus", selectedProjectID: nil)
+        XCTAssertEqual(after.compactMap(\.sessionId), ["old", "draft"])
+        XCTAssertEqual(after.map(\.archived), [true, nil])
+        XCTAssertEqual(after.map(\.title), ["Plan old", "Nimbus draft"])
+        XCTAssertEqual(wire.searches.count, 1)
     }
 
     /// Clearing the search shows the loaded list again, without the host's matches or snippets.
@@ -579,8 +609,9 @@ import Observation
     }
 }
 
-/// A scripted Hermes host for the Sessions list: pages by Profile and offset, read marks,
-/// `session.active_list`, `profiles.list`, `session.most_recent` and the search (#1053). A test
+/// A scripted Hermes host for the Sessions list: pages by Profile and offset, read marks and
+/// other changes, `session.active_list`, `profiles.list`, `session.most_recent`,
+/// `session.delete` and the search (#1053). A test
 /// can park page reads, read-mark writes or searches, and push gateway events.
 @MainActor @Observable final class HermesSessionListWire: BotTransport {
     struct UnreadWrite: Equatable { let key: String; let profile: String; let unread: Bool }
@@ -608,6 +639,8 @@ import Observation
     private(set) var pageReads: [(profile: String, offset: Int)] = []
     private(set) var answeredPages = 0
     private(set) var unreadWrites: [UnreadWrite] = []
+    /// Every other change written, each accepted with the title as sent.
+    private(set) var changes: [HermesSessionChange] = []
     private(set) var calls: [(method: String, profile: String?)] = []
     @ObservationIgnored private var held: [CheckedContinuation<Void, Never>] = []
 
@@ -623,6 +656,7 @@ import Observation
             return .object(["session_id": .null])
         case "session.active_list": return .object(["sessions": .array(active)])
         case "profiles.list": return .object(["profiles": .array(profiles.map { .object(["name": .string($0)]) })])
+        case "session.delete": return .object([:])
         default: throw BotFailure.unsupported
         }
     }
@@ -640,7 +674,7 @@ import Observation
     }
 
     func updateSession(_ change: HermesSessionChange, key: String, profile: String) async throws -> String? {
-        guard case .unread(let unread) = change else { throw BotFailure.unsupported }
+        guard case .unread(let unread) = change else { changes.append(change); return nil }
         unreadWrites.append(UnreadWrite(key: key, profile: profile, unread: unread))
         if holdsUnread { await withCheckedContinuation { held.append($0) } }
         if unreadFails { throw BotFailure.rejected(500) }

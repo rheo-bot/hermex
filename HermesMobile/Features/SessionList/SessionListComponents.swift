@@ -114,6 +114,11 @@ enum SessionRowActionPolicy {
         offersMutationActions(for: session)
     }
 
+    /// Not on an archived match a Hermes search lists (#1053): the Archived screen restores it.
+    static func offersArchive(for session: SessionSummary) -> Bool {
+        offersMutationActions(for: session) && session.archived != true
+    }
+
     /// "No project" in the Move menu. A Hermes session always works in some folder, so it can
     /// only move to another project's (#1052).
     static func offersRemoveFromProject(for session: SessionSummary) -> Bool {
@@ -715,13 +720,15 @@ struct SessionInteractiveRow: View {
     @ViewBuilder
     private func sessionTrailingSwipeActions(for session: SessionSummary) -> some View {
         if canShowSessionMutationActions(for: session) {
-            Button {
-                actions.archive(session)
-            } label: {
-                Label("Archive", systemImage: "archivebox")
+            if SessionRowActionPolicy.offersArchive(for: session) {
+                Button {
+                    actions.archive(session)
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .disabled(viewModel.isMutating(session))
+                .tint(.orange)
             }
-            .disabled(viewModel.isMutating(session))
-            .tint(.orange)
 
             Button {
                 actions.delete(session)
@@ -970,12 +977,14 @@ struct SessionRowContextMenu: View {
         exportMenu
 
         if SessionRowActionPolicy.offersMutationActions(for: session) {
-            Button {
-                actions.archive(session)
-            } label: {
-                Label("Archive", systemImage: "archivebox")
+            if SessionRowActionPolicy.offersArchive(for: session) {
+                Button {
+                    actions.archive(session)
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .disabled(!canShowSessionMutationActions || isMutating)
             }
-            .disabled(!canShowSessionMutationActions || isMutating)
 
             Button(role: .destructive) {
                 actions.delete(session)
