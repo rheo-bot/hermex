@@ -369,6 +369,32 @@ leave the REST page; a cut row is 4018 afterwards; a running turn refuses both c
 `session.undo`'s `removed` counts rows (0 once nothing is left); and a `/skill` row's REST
 `content` is the expanded skill, which a rewind of the typed line stores again unchanged.
 
+`/compress [focus]` and its alias `/compact` (#1050) are `session.compress {session_id:
+<runtime>, profile, focus_topic?}` (`HermesCall.sessionCompress`), never the host's `slash.exec`.
+The composer shows "Compressing context..." until the host answers; a running turn is refused
+locally and a busy host with 4009, both with the wait copy. `{status: "compressed"}` with rows
+`removed` (or no count, from a compute host) starts the history again from the newest page,
+since an in-place compaction archives the middle turns (`active: 0`) and re-inserts the rest
+under new ids, and posts one note built like webui's: "Context compressed." with the summary's
+`headline` and `token_line` and the focus. `compressed` with `removed: 0` (nothing to gain, or a
+summary that would grow the transcript), `aborted`, `pending` (the compute host is still at it)
+and `{compressed: false, lock_held: true}` show the host's `message`, else the summary's `note`
+or `headline`, on the status line and keep the draft. On a host set to legacy rotation
+(`compression.in_place: false`), a compaction, manual or mid-turn, moves the session to a new
+stored key, which `session.info` (and the compress reply's `info`) reports as
+`stored_session_id`: `HermesConversation.adoptStoredKey` takes it while connected, so later
+pages, uploads and titles follow it, while `root`, the draft key and the list row keep the
+original. `/clear` deletes nothing: it opens a new chat in this one's place,
+`ConversationTarget.new(profile:cwd:model:)` with the chip's model and the last reported `cwd`,
+whose first attach is `session.create {profile, cwd, model, provider}`; reasoning, personality
+and yolo start at the new chat's defaults, and the old chat stays in the list with its history
+and draft, so nothing asks first. Checked against `scripts/local-hermes` at the pin: a running
+turn refuses `session.compress` with 4009; a small session answers `compressed` with
+`removed: 0` and a "Compression refused (summary would grow …)" headline; a long one answers
+`{status: "compressed", removed: 10, summary: {headline: "Compressed: 28 → 18 messages",
+token_line}}` and emits `session.info` with the same `stored_session_id` (in place), and
+`session.create` with `cwd`, `model` and `provider` reports them in its `info`.
+
 Its goal, `/btw` and `/background` are `HermesChatSideTasks` (#1013); the main chat routes
 only these three `/` commands and sends any other `/` text as typed. Every goal verb and a
 new goal's text is `command.dispatch {name: "goal", arg}`: `exec` output shows as a notice,
@@ -1751,16 +1777,18 @@ Send resolves a draft that opens with `/name` in this order:
 
 1. **Hermex's own** (`SlashCommandCatalog.hermesCommands`): `/new`, `/stop`,
    `/model`, `/reasoning`, `/personality`, `/title`, `/goal`, `/btw`, `/bg` and
-   `/background`, `/retry` and `/undo`, and `/yolo` (the session's `config.set yolo`).
+   `/background`, `/retry` and `/undo`, `/compress`, `/compact` and `/clear`, and `/yolo`
+   (the session's `config.set yolo`).
    Each keeps its native path; an alias such as `/reset` resolves to its command first.
    `/title` (#1048) is `session.title {session_id: <runtime>, title}`; the header takes
    the title the host kept, and `session.info`'s `title` after that. A title in use or
    too long is 4022 with the host's message, and the draft stays. `/retry` and `/undo`
    (#1049) rewind the session as above, never through the host's `command.dispatch`,
-   whose retry still needs a follow-up submit.
-2. **Held until #702 slice 2.3** (`hermesHeldNames`): `/compress`, `/compact`,
-   `/clear`, `/branch`, `/fork`, `/resume`, `/sessions`. They rewrite history or
-   move between chats, so they show a notice naming #702 and send nothing.
+   whose retry still needs a follow-up submit. `/compress`, `/compact` and `/clear`
+   (#1050) compress and start a new chat as above.
+2. **Held until #702 slice 2.3** (`hermesHeldNames`): `/branch`, `/fork`, `/resume`,
+   `/sessions`. They move between chats, so they show a notice naming #702 and send
+   nothing.
 3. **A catalog skill**: `command.dispatch` expands it and `message` is submitted.
 4. **Any other catalog command or alias**: `slash.exec {session_id, command}`
    with the typed line, once.

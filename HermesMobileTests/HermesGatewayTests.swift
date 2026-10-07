@@ -271,6 +271,36 @@ import XCTest
         XCTAssertEqual(HermesHostFixture.count("/api/auth/ws-ticket"), 1)
     }
 
+    /// `session.compress` waits on the model's summary as Desktop does (#1050): the usual
+    /// deadline, which still ends another screen's call, never ends it.
+    func testACompressionOutlivesTheUsualDeadline() async throws {
+        let http = connection(rpcDeadline: .milliseconds(50))
+        let chat = BotClient(http: http), other = BotClient(http: http)
+        try await chat.connect()
+        try await other.connect()
+        defer { chat.close(); other.close() }
+        var chatLost = 0
+        chat.onDisconnect = { _ in chatLost += 1 }
+        let socket = try XCTUnwrap(sockets.first)
+        let sent = expectation(description: "compress on the wire")
+        socket.withholdReply = { request in
+            if request["method"].text == "session.compress" { sent.fulfill(); return true }
+            return request["method"].text == "session.resume"
+        }
+
+        let compress = Task { try await chat.call(.sessionCompress(runtime: "runtime", focus: nil, profile: "default")) }
+        await fulfillment(of: [sent], timeout: 2)
+        do {
+            _ = try await other.call(.sessionResume(profile: "default", sessionID: "tip", omitMessages: true))
+            XCTFail("An unanswered call cannot succeed")
+        } catch { XCTAssertEqual(error as? BotFailure, .transport, "the usual deadline passed") }
+        try answer(socket, "session.compress", with: .object(["status": .string("compressed"), "removed": .number(4)]))
+
+        let reply = try await compress.value
+        XCTAssertEqual(reply["removed"].integer, 4)
+        XCTAssertEqual(chatLost, 0)
+    }
+
     /// The socket closes with the last screen to leave, and the next screen opens a fresh
     /// one on the same sign-in.
     func testTheSocketLivesWhileAConsumerHoldsItAndReopensFresh() async throws {

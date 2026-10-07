@@ -44,8 +44,9 @@ enum HermesCall: Equatable, Sendable {
 
     // Sessions
     /// Mints a plain session under the Profile: no title, not hidden. The host writes no
-    /// row until its first prompt (`ConversationTarget.new`).
-    case sessionNew(profile: String)
+    /// row until its first prompt (`ConversationTarget.new`). `/clear` (#1050) starts it in
+    /// the old chat's working folder and on its model; otherwise the Profile's defaults.
+    case sessionNew(profile: String, cwd: String? = nil, model: Model? = nil)
     /// `/title` in an open chat (#1048): renames the session `runtime` runs and emits
     /// `session.info`. A title in use or over 100 characters is 4022 with the host's message.
     case sessionRename(runtime: String, title: String)
@@ -70,6 +71,10 @@ enum HermesCall: Equatable, Sendable {
     /// `/undo` in a Hermes session (#1049): rewinds the last real user turn on `runtime`
     /// and answers `{removed}`. Refused while a turn runs (4009).
     case sessionUndo(runtime: String)
+    /// `/compress` and `/compact` in a Hermes session (#1050): compacts `runtime`'s history,
+    /// steered by `focus`, and answers `{status, removed, summary, info}`; another compressor
+    /// holding the lock answers `{lock_held, message}`. Refused while a turn runs (4009).
+    case sessionCompress(runtime: String, focus: String?, profile: String)
     case sessionSteer(sessionID: String, text: String)
     case sessionRedirect(sessionID: String, text: String)
     case sessionInterrupt(sessionID: String)
@@ -147,7 +152,7 @@ enum HermesCall: Equatable, Sendable {
     }
 
     /// A model the host resolves under one provider.
-    struct Model: Equatable, Sendable {
+    struct Model: Hashable, Sendable {
         var id: String
         var provider: String
     }
@@ -248,6 +253,7 @@ enum HermesCall: Equatable, Sendable {
         case .sessionRedirect: return "session.redirect"
         case .sessionInterrupt: return "session.interrupt"
         case .sessionUndo: return "session.undo"
+        case .sessionCompress: return "session.compress"
         case .fileAttach: return "file.attach"
         case .promptBtw: return "prompt.btw"
         case .promptBackground: return "prompt.background"
@@ -305,11 +311,20 @@ enum HermesCall: Equatable, Sendable {
         case .sessionCreate(let profile):
             return ["profile": .string(profile), "title": .string(Self.botChatTitle),
                     "hidden": .bool(true), "follow_profile_config": .bool(true)]
-        case .sessionNew(let profile), .sessionMostRecent(let profile): return ["profile": .string(profile)]
+        case .sessionNew(let profile, let cwd, let model):
+            var params: [String: BotJSON] = ["profile": .string(profile)]
+            if let cwd { params["cwd"] = .string(cwd) }
+            if let model { params["model"] = .string(model.id); params["provider"] = .string(model.provider) }
+            return params
+        case .sessionMostRecent(let profile): return ["profile": .string(profile)]
         case .sessionTitle(let sessionID): return ["session_id": .string(sessionID), "title": .string(Self.botChatTitle)]
         case .sessionRename(let runtime, let title): return ["session_id": .string(runtime), "title": .string(title)]
         case .sessionClose(let runtime), .sessionUndo(let runtime): return ["session_id": .string(runtime)]
         case .sessionDelete(let profile, let storedKey): return ["session_id": .string(storedKey), "profile": .string(profile)]
+        case .sessionCompress(let runtime, let focus, let profile):
+            var params: [String: BotJSON] = ["session_id": .string(runtime), "profile": .string(profile)]
+            if let focus { params["focus_topic"] = .string(focus) }
+            return params
         case .sessionResume(let profile, let sessionID, let omitMessages):
             var params: [String: BotJSON] = ["profile": .string(profile), "session_id": .string(sessionID),
                                              "close_on_disconnect": .bool(false)]
@@ -428,7 +443,11 @@ enum HermesCall: Equatable, Sendable {
             else { valid = !name.isEmpty }
         case .profilesConfigure(let changes): valid = changes.isAdmissible
         case .profilesCreate(let profile): valid = profile.isAdmissible
-        case .sessionCreate(let profile), .sessionNew(let profile), .sessionMostRecent(let profile): valid = !profile.isEmpty
+        case .sessionCreate(let profile), .sessionMostRecent(let profile): valid = !profile.isEmpty
+        case .sessionNew(let profile, let cwd, let model):
+            valid = !profile.isEmpty && cwd?.isEmpty != true && model?.isAdmissible != false
+        case .sessionCompress(let runtime, let focus, let profile):
+            valid = !runtime.isEmpty && !profile.isEmpty && focus?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true
         case .sessionTitle(let sessionID), .commandsCatalog(let sessionID), .subagentList(let sessionID),
              .sessionClose(let sessionID), .sessionUndo(let sessionID):
             valid = !sessionID.isEmpty

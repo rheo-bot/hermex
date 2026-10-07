@@ -467,24 +467,30 @@ private extension HermesCall {
     }
 
     /// How long a reply may take. A slash command may run in the host's slash worker, which
-    /// allows it 45 s, so `slash.exec` waits twice the usual deadline.
+    /// allows it 45 s, so `slash.exec` waits twice the usual deadline. A compaction asks the
+    /// model for its summary, so `session.compress` (#1050) waits as long as Desktop does
+    /// (`SESSION_COMPRESS_TIMEOUT_MS`), past the host's own 630 s cap.
     func deadline(_ standard: Duration) -> Duration {
-        if case .slashExec = self { return standard * 2 }
-        return standard
+        switch self {
+        case .slashExec: return standard * 2
+        case .sessionCompress: return .seconds(660)
+        default: return standard
+        }
     }
 
     /// Room rejections carry the host's reason as `BotRoomFailure`; setting rejections
     /// carry its message as `BotSettingFailure`. So do a refused `/goal`, whose 4004 message
     /// says what was wrong with it (#1013), a refused slash command (#1036), a refused
-    /// `/title`, whose 4022 message names the session already using it (#1048), and a refused
-    /// rewind or `/undo`, whose 5008 message says why the host could not write the cut (#1049).
+    /// `/title`, whose 4022 message names the session already using it (#1048), a refused
+    /// rewind or `/undo`, whose 5008 message says why the host could not write the cut (#1049),
+    /// and a refused `/compress`, whose 5005 message says why the compaction failed (#1050).
     var rejection: Rejection {
         if method.hasPrefix("groups.") { return .room }
         switch self {
         case .configSet, .sessionCwdSet, .sessionControl, .modelOptions, .configuredModelOptions, .profileModelOptions,
              .sessionControlRead: return .setting
         case .commandDispatch(let name, _, _) where name == "goal": return .setting
-        case .slashExec, .sessionRename, .promptRewind, .sessionUndo: return .setting
+        case .slashExec, .sessionRename, .promptRewind, .sessionUndo, .sessionCompress: return .setting
         default: return .plain
         }
     }

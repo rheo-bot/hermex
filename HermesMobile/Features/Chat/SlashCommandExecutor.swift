@@ -12,6 +12,8 @@ enum SlashCommandExecutionResult: Equatable {
     case openedSession(SessionSummary)
     /// `/new` in a Hermes chat: a new chat in its Profile (#1036).
     case openedHermesSession(HermesSessionChat)
+    /// `/clear` in a Hermes chat: a new chat that takes this one's place (#1050).
+    case replacedHermesSession(HermesSessionChat)
     /// The host's `prefill`: this text replaces the draft (#1036).
     case prefill(String)
     case sendAsMessage

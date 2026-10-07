@@ -58,8 +58,11 @@ import Observation
         XCTAssertEqual(slash.route("title"), .appOwned(SlashCommandCatalog.command(named: "title")!), "#1048")
         XCTAssertEqual(slash.route("undo"), .appOwned(SlashCommandCatalog.command(named: "undo")!), "#1049")
         XCTAssertEqual(slash.route("retry"), .appOwned(SlashCommandCatalog.command(named: "retry")!), "#1049")
-        XCTAssertEqual(slash.route("compact"), .held)
+        XCTAssertEqual(slash.route("compress"), .appOwned(SlashCommandCatalog.command(named: "compress")!), "#1050")
+        XCTAssertEqual(slash.route("compact"), .appOwned(SlashCommandCatalog.command(named: "compact")!), "#1050")
+        XCTAssertEqual(slash.route("clear").appOwnedHandler, .clientSide(.clear), "#1050")
         XCTAssertEqual(slash.route("branch"), .held)
+        XCTAssertEqual(slash.route("fork"), .held)
         XCTAssertEqual(slash.route("demo-skill").isSkill, true)
         XCTAssertEqual(slash.route("context"), .host)
         XCTAssertEqual(slash.route("ctx"), .host)
@@ -83,8 +86,8 @@ import Observation
 
     func testAHeldCommandShowsTheNoticeAndSendsNothing() async {
         let chat = await openChat()
-        let result = await chat.model.runHermesSlashCommand("/compact")
-        XCTAssertEqual(result, .unsupported(friendlyMessage: "Hermex can't run /compact in a Hermes chat yet (#702)."))
+        let result = await chat.model.runHermesSlashCommand("/branch")
+        XCTAssertEqual(result, .unsupported(friendlyMessage: "Hermex can't run /branch in a Hermes chat yet (#702)."))
         XCTAssertEqual(chat.writes("slash.exec"), [])
         XCTAssertEqual(chat.writes("prompt.submit"), [])
     }
@@ -343,4 +346,6 @@ import Observation
 
 private extension HermesSlashRoute {
     var isSkill: Bool { if case .skill = self { return true }; return false }
+    /// The handler of an app-owned command; nil for any other route.
+    var appOwnedHandler: SlashCommandHandler? { if case .appOwned(let command) = self { return command.handler }; return nil }
 }

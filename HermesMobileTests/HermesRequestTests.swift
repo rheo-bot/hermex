@@ -41,6 +41,9 @@ final class HermesRequestTests: XCTestCase {
              ["profile": .string("triage"), "title": .string("Bot Chat"), "include_hidden": .bool(true)]),
             (.sessionCreate(profile: "triage"), "session.create",
              ["profile": .string("triage"), "title": .string("Bot Chat"), "hidden": .bool(true), "follow_profile_config": .bool(true)]),
+            (.sessionNew(profile: "triage"), "session.create", ["profile": .string("triage")]),
+            (.sessionNew(profile: "triage", cwd: "/work", model: .init(id: "gpt-6", provider: "openai")), "session.create",
+             ["profile": .string("triage"), "cwd": .string("/work"), "model": .string("gpt-6"), "provider": .string("openai")]),
             (.sessionTitle(sessionID: "runtime"), "session.title", ["session_id": .string("runtime"), "title": .string("Bot Chat")]),
             (.sessionRename(runtime: "runtime", title: "Plan"), "session.title",
              ["session_id": .string("runtime"), "title": .string("Plan")]),
@@ -64,6 +67,10 @@ final class HermesRequestTests: XCTestCase {
             (.sessionRedirect(sessionID: "runtime", text: "hi"), "session.redirect", ["session_id": .string("runtime"), "text": .string("hi")]),
             (.sessionInterrupt(sessionID: "runtime"), "session.interrupt", ["session_id": .string("runtime")]),
             (.sessionUndo(runtime: "runtime"), "session.undo", ["session_id": .string("runtime")]),
+            (.sessionCompress(runtime: "runtime", focus: nil, profile: "triage"), "session.compress",
+             ["session_id": .string("runtime"), "profile": .string("triage")]),
+            (.sessionCompress(runtime: "runtime", focus: "the API", profile: "triage"), "session.compress",
+             ["session_id": .string("runtime"), "profile": .string("triage"), "focus_topic": .string("the API")]),
             (.promptBtw(sessionID: "runtime", text: "why?"), "prompt.btw", ["session_id": .string("runtime"), "text": .string("why?")]),
             (.promptBackground(sessionID: "runtime", text: "sum up"), "prompt.background",
              ["session_id": .string("runtime"), "text": .string("sum up")]),
@@ -153,6 +160,16 @@ final class HermesRequestTests: XCTestCase {
         XCTAssertThrowsError(try HermesCall.sessionClose(runtime: "").params())
         XCTAssertThrowsError(try HermesCall.sessionDelete(profile: "", storedKey: "tip").params())
         XCTAssertThrowsError(try HermesCall.sessionDelete(profile: "triage", storedKey: "").params())
+    }
+
+    /// A compaction names its runtime and Profile, and a focus only when there is one; a new
+    /// session's folder and model are never blank (#1050).
+    func testCompressAndNewSessionCallsRefuseBlankValues() {
+        XCTAssertThrowsError(try HermesCall.sessionCompress(runtime: "", focus: nil, profile: "triage").params())
+        XCTAssertThrowsError(try HermesCall.sessionCompress(runtime: "runtime", focus: nil, profile: "").params())
+        XCTAssertThrowsError(try HermesCall.sessionCompress(runtime: "runtime", focus: " \n", profile: "triage").params())
+        XCTAssertThrowsError(try HermesCall.sessionNew(profile: "triage", cwd: "").params())
+        XCTAssertThrowsError(try HermesCall.sessionNew(profile: "triage", model: .init(id: "gpt-6", provider: "")).params())
     }
 
     /// Slash commands go out one typed line at a time, and completion only at a command's

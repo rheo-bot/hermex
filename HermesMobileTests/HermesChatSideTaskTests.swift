@@ -235,7 +235,7 @@ import Observation
     /// The goal, btw, background and model (#1015) commands run in a Hermes session itself;
     /// the host runs the rest (#1036).
     func testAHermesSessionRunsOnlyItsSideCommands() {
-        XCTAssertEqual(["goal", "btw", "background", "bg", "model", "steer", "queue", "status", "clear"]
+        XCTAssertEqual(["goal", "btw", "background", "bg", "model", "steer", "queue", "status"]
             .filter { SlashCommandCatalog.hermesCommand(named: $0) != nil }, ["goal", "btw", "background", "bg", "model"])
     }
 

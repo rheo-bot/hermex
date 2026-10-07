@@ -77,7 +77,8 @@ struct HermesChatTranscript: Equatable {
 /// requests (approvals, questions, sudo and secret prompts) are `requests` (#1011); the goal,
 /// `/btw` and `/background` are `sideTasks` (#1013); its model and Profile chips are
 /// `settings` (#1015); its host's slash commands are `slashCommands` (#1036). Edit,
-/// Regenerate, `/retry` and `/undo` cut the host's history (`rewind`, `undo`; #1049).
+/// Regenerate, `/retry` and `/undo` cut the host's history (`rewind`, `undo`; #1049), and
+/// `/compress` compacts it (`compress`; #1050).
 ///
 /// A turn's identity is the stored key and the host's `turn_started_at`, in place of a
 /// webui stream id. A turn starts at `message.start`, an accepted send or a running
@@ -115,6 +116,9 @@ struct HermesChatTranscript: Equatable {
     @ObservationIgnored private var hostRunning = false
     /// The last title `session.info` reported, so a repeat leaves the header alone.
     @ObservationIgnored private var infoTitle: String?
+    /// The session's working folder, as the latest `session.info` or attach reports it.
+    /// `/clear` starts its new chat there (#1050).
+    @ObservationIgnored private(set) var cwd: String?
     /// How the running turn ended, from `message.complete`, until `session.info` says idle.
     @ObservationIgnored private var pendingEnding: TranscriptTurnRunOutcome.Ending?
     /// The turn began from a send's reply; its own `message.start` is still to come.
@@ -486,6 +490,63 @@ struct HermesChatTranscript: Equatable {
         delegate?.hermesReplaceTranscript(historyTranscript())
     }
 
+    /// What `/compress` did (#1050).
+    enum Compression: Equatable {
+        /// The host compacted the history, and the newest page replaced the transcript. The
+        /// summary's headline and token line, when the host sent them.
+        case compacted(headline: String?, tokenLine: String?)
+        /// Nothing was removed: the summary would not have shrunk it, it was aborted, another
+        /// compressor holds the session's lock, or the compute host is still at it. The host's
+        /// words, when it sent any.
+        case unchanged(String?)
+    }
+
+    /// `/compress` and `/compact` (#1050): `session.compress` on the runtime, with the Profile
+    /// and any `focus`. Once the host removed rows, the history starts again from the newest
+    /// page, since the compaction archived or re-numbered every row held, and that page
+    /// replaces the transcript, compaction card included; Load earlier reaches the rest. A
+    /// rotated stored key in the reply's `info` is adopted first. Sent once; a busy host
+    /// refuses it (4009). Throws as `rewind` does.
+    func compress(focus: String?) async throws -> Compression {
+        await activate()
+        guard engine.connectionState == .connected, let runtime = engine.runtime else {
+            throw NotSent(underlying: BotFailure.transport)
+        }
+        let attempt = engine.generation
+        let reply = try await writeOnce(.sessionCompress(runtime: runtime, focus: focus, profile: engine.target.profile),
+                                        runtime: runtime)
+        engine.adoptStoredKey(reply["info"]["stored_session_id"].text)
+        let summary = reply["summary"]
+        let reason = [reply["message"], summary["note"], summary["headline"]].lazy.compactMap(Self.words).first
+        switch reply["status"].text {
+        case "compressed" where reply["removed"].integer != 0:
+            break
+        case "compressed", "aborted", "pending":
+            return .unchanged(reason)
+        case nil where reply["lock_held"].flag == true:
+            return .unchanged(reason)
+        default:
+            throw BotFailure.unsupported
+        }
+        let compacted = Compression.compacted(headline: Self.words(summary["headline"]), tokenLine: Self.words(summary["token_line"]))
+        guard attempt == engine.generation else { return compacted }
+        historyRefresh?.cancel()
+        history = HermesTranscriptHistory()
+        await readNewestRows(attempt: attempt)
+        guard attempt == engine.generation, isIdle else { return compacted }
+        if let historyFailure {
+            delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: historyFailure, address: engine.connection.address))
+        } else {
+            delegate?.hermesReplaceTranscript(historyTranscript())
+        }
+        return compacted
+    }
+
+    /// A reply's text, or nil when it is missing or blank.
+    private static func words(_ value: BotJSON) -> String? {
+        value.text.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    }
+
     /// One history write on `runtime`, sent once. Throws `NotSent` when it never went out; a
     /// reaped runtime (4001) also reattaches.
     private func writeOnce(_ call: HermesCall, runtime: String) async throws -> BotJSON {
@@ -640,6 +701,9 @@ struct HermesChatTranscript: Equatable {
 
     private func applyInfo(_ info: BotJSON) {
         if let model = info["model"].text, !model.isEmpty { delegate?.hermesApplyModel(model) }
+        // A legacy compaction, `/compress` or mid-turn, moves the session to a new key (#1050).
+        engine.adoptStoredKey(info["stored_session_id"].text)
+        noteCwd(info)
         // A rename on this runtime (`/title`, #1048) reports the new title here.
         if let title = info["title"].text, !title.isEmpty, title != infoTitle {
             infoTitle = title
@@ -693,6 +757,11 @@ struct HermesChatTranscript: Equatable {
         if !hostRunning { finish(ending) }
     }
 
+    /// Keeps the working folder a `session.info` or a snapshot's `info` reports.
+    private func noteCwd(_ info: BotJSON) {
+        if let folder = Self.words(info["cwd"]) { cwd = folder }
+    }
+
     /// Settles the turn against an attach's snapshot, then rebuilds the transcript from the
     /// history and it when frames were lost. Without a rebuild the replay already continued
     /// the turn.
@@ -703,6 +772,7 @@ struct HermesChatTranscript: Equatable {
         queuedPrompt = snapshot["queued"]["user"].text.flatMap { $0.isEmpty ? nil : $0 }
         requests.didReadSnapshot(snapshot)
         if let model = snapshot["info"]["model"].text, !model.isEmpty { delegate?.hermesApplyModel(model) }
+        noteCwd(snapshot["info"])
         // Ahead of the turn below, so its Live Activity starts under the session's title.
         if let title = snapshot["info"]["title"].text, !title.isEmpty { applyTitle(title) }
         if activeStreamID != nil, !running || (startedAt != nil && turnStartedAt != nil && startedAt != turnStartedAt) {
