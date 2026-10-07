@@ -506,15 +506,23 @@ struct HermesChatTranscript: Equatable {
     /// page, since the compaction archived or re-numbered every row held, and that page
     /// replaces the transcript, compaction card included; Load earlier reaches the rest. A
     /// rotated stored key in the reply's `info` is adopted first. Sent once; a busy host
-    /// refuses it (4009). Throws as `rewind` does.
+    /// refuses it (4009). Throws as `rewind` does; after a lost or unreadable answer the next
+    /// attach, now or once the chat is back, reads the history from the newest page and
+    /// rebuilds, since the host may have compacted it.
     func compress(focus: String?) async throws -> Compression {
         await activate()
         guard engine.connectionState == .connected, let runtime = engine.runtime else {
             throw NotSent(underlying: BotFailure.transport)
         }
         let attempt = engine.generation
-        let reply = try await writeOnce(.sessionCompress(runtime: runtime, focus: focus, profile: engine.target.profile),
+        let reply: BotJSON
+        do {
+            reply = try await writeOnce(.sessionCompress(runtime: runtime, focus: focus, profile: engine.target.profile),
                                         runtime: runtime)
+        } catch {
+            if !(error is NotSent || error is BotSettingFailure) { forgetHistoryUntilRebuild() }
+            throw error
+        }
         engine.adoptStoredKey(reply["info"]["stored_session_id"].text)
         let summary = reply["summary"]
         let reason = [reply["message"], summary["note"], summary["headline"]].lazy.compactMap(Self.words).first
@@ -526,6 +534,7 @@ struct HermesChatTranscript: Equatable {
         case nil where reply["lock_held"].flag == true:
             return .unchanged(reason)
         default:
+            forgetHistoryUntilRebuild()
             throw BotFailure.unsupported
         }
         let compacted = Compression.compacted(headline: Self.words(summary["headline"]), tokenLine: Self.words(summary["token_line"]))
@@ -540,6 +549,16 @@ struct HermesChatTranscript: Equatable {
             delegate?.hermesReplaceTranscript(historyTranscript())
         }
         return compacted
+    }
+
+    /// A compaction whose answer was lost may have archived or re-numbered every row held, so
+    /// merging the newest page into them could show turns twice: the history starts again,
+    /// and the next attach reads the newest page and rebuilds the transcript from it, whether
+    /// the lost answer's recovery reattaches now or the chat already left.
+    private func forgetHistoryUntilRebuild() {
+        historyRefresh?.cancel()
+        history = HermesTranscriptHistory()
+        needsRebuild = true
     }
 
     /// A reply's text, or nil when it is missing or blank.

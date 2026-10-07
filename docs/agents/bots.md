@@ -379,7 +379,10 @@ under new ids, and posts one note built like webui's: "Context compressed." with
 `headline` and `token_line` and the focus. `compressed` with `removed: 0` (nothing to gain, or a
 summary that would grow the transcript), `aborted`, `pending` (the compute host is still at it)
 and `{compressed: false, lock_held: true}` show the host's `message`, else the summary's `note`
-or `headline`, on the status line and keep the draft. On a host set to legacy rotation
+or `headline`, on the status line and keep the draft. A lost or unreadable answer, such as
+one backgrounding drops while the model writes the summary, is never resent (#508): the next
+attach, at once or when the chat returns, reads the history from the newest page and rebuilds.
+On a host set to legacy rotation
 (`compression.in_place: false`), a compaction, manual or mid-turn, moves the session to a new
 stored key, which `session.info` (and the compress reply's `info`) reports as
 `stored_session_id`: `HermesConversation.adoptStoredKey` takes it while connected, so later

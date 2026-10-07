@@ -102,6 +102,29 @@ import Observation
         XCTAssertEqual(chat.writes("session.compress"), [])
     }
 
+    /// Leaving while the host summarizes, as backgrounding does, loses the answer. Nothing is
+    /// sent again, and on return the chat reads the compacted history from the newest page
+    /// instead of keeping the rows it held.
+    func testACompactionWhoseAnswerWasLostIsReadOnReturn() async {
+        let chat = await openChat(threeTurns)
+        chat.host.withhold("session.compress")
+        let sent = expectation(description: "session.compress went out")
+        chat.host.expect(sent, onNext: "session.compress")
+
+        let compressing = Task { await chat.model.runHermesSlashCommand("/compress") }
+        await fulfillment(of: [sent], timeout: 5)
+        chat.model.suspendStreamForNavigation()
+        let result = await compressing.value
+        XCTAssertEqual(result, .notDelivered)
+        XCTAssertEqual(chat.model.sendErrorMessage, "The server did not confirm the change.")
+        chat.pages["tip"] = compactedTurns
+        await chat.model.reconnectStreamIfNeeded()
+
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [7, 8, 3, 4, 10, 11])
+        XCTAssertEqual(chat.model.compressionReferenceCard?.referenceText, "The user asked for two answers.")
+        XCTAssertEqual(chat.writes("session.compress").count, 1)
+    }
+
     // MARK: Stored key rotation
 
     /// A host on legacy compaction re-points the session to a new stored key, which its

@@ -1966,6 +1966,7 @@ final class BotSocketHost: @unchecked Sendable {
         "subagent.list": Reply(result: .object(["subagents": .array([]), "delegations": .array([])]))
     ]
     private var queued: [String: [Reply]] = [:]
+    private var withheld: Set<String> = []
     private var log: [BotJSON] = []
     private var waiters: [(method: String, expectation: XCTestExpectation)] = []
 
@@ -1976,6 +1977,9 @@ final class BotSocketHost: @unchecked Sendable {
     func always(_ method: String, _ reply: Reply) { lock.withLock { standing[method] = reply } }
     /// Answers the next `method` call with `reply`, ahead of any standing one.
     func next(_ method: String, _ reply: Reply) { lock.withLock { queued[method, default: []].append(reply) } }
+    /// Leaves every later `method` call unanswered, as a reply the socket lost; it is still
+    /// logged.
+    func withhold(_ method: String) { lock.withLock { _ = withheld.insert(method) } }
     /// Fulfills `expectation` when the next `method` call arrives.
     func expect(_ expectation: XCTestExpectation, onNext method: String) {
         lock.withLock { waiters.append((method, expectation)) }
@@ -1993,6 +1997,11 @@ final class BotSocketHost: @unchecked Sendable {
                          gateway: .init(socketFactory: { [self] _ in
                              let socket = BotScriptedSocket()
                              socket.reply = { [weak socket, self] request in answer(request, on: socket) }
+                             socket.withholdReply = { [self] request in
+                                 guard lock.withLock({ withheld.contains(request["method"].text ?? "") }) else { return false }
+                                 _ = answer(request, on: nil) // logged and awaited like any call; its answer is dropped
+                                 return true
+                             }
                              return socket
                          }))
     }
