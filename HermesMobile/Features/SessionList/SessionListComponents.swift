@@ -101,15 +101,33 @@ struct SessionListRowActions {
 }
 
 /// Which row actions a session offers. A Hermes server's row (#1046, #1048) offers pin,
-/// rename, archive, delete and Export as JSON. Duplicate and Move to Project wait on later
-/// slices of #702; the host has no HTML export, and Hermes deep links are #706.
+/// rename, archive, delete, Export as JSON and Move to Project (#1052). Duplicate waits on a
+/// later slice of #702; the host has no HTML export, and Hermes deep links are #706.
 enum SessionRowActionPolicy {
     static func offersMutationActions(for session: SessionSummary) -> Bool {
         !session.isSessionReadOnly
     }
 
     static func offersProjectMove(for session: SessionSummary) -> Bool {
-        offersMutationActions(for: session) && session.hermes == nil
+        offersMutationActions(for: session)
+    }
+
+    /// "No project" in the Move menu. A Hermes session always works in some folder, so it can
+    /// only move to another project's (#1052).
+    static func offersRemoveFromProject(for session: SessionSummary) -> Bool {
+        session.hermes == nil
+    }
+
+    /// The projects the Move menu lists. On Hermes only the user's own projects with a folder
+    /// take a session; an automatic per-repository one is just where sessions in that repository
+    /// already are.
+    static func moveTargets(_ projects: [ProjectSummary]) -> [ProjectSummary] {
+        projects.filter { project in project.hermes.map { !$0.isAutomatic && $0.folder != nil } ?? true }
+    }
+
+    /// Rename and Delete on a project row. A Hermes automatic project has no record to change.
+    static func offersProjectEditing(_ project: ProjectSummary) -> Bool {
+        project.hermes?.isAutomatic != true
     }
 
     /// The Export menu's formats, in menu order.
@@ -488,7 +506,9 @@ struct SessionSidebarUtilityRows: View {
         return profile.isActive == true
     }
 
+    /// A Hermes lane shows the host's count, as Desktop does, which takes in sessions not yet paged in.
     private func sessionCount(for project: ProjectSummary) -> Int {
+        if let hermes = project.hermes { return hermes.sessionCount }
         guard let projectID = project.projectId else { return 0 }
         return viewModel.sessions.filter { session in
             session.projectId == projectID && automatedVisibility.shows(session)
@@ -1020,17 +1040,24 @@ struct SessionProjectMoveMenu: View {
     let actions: SessionListRowActions
 
     var body: some View {
-        Button {
-            actions.move(session, nil)
-        } label: {
-            Label("No project", systemImage: session.projectId == nil ? "checkmark" : "tray")
+        let offersRemove = SessionRowActionPolicy.offersRemoveFromProject(for: session)
+        let targets = SessionRowActionPolicy.moveTargets(projects)
+
+        if offersRemove {
+            Button {
+                actions.move(session, nil)
+            } label: {
+                Label("No project", systemImage: session.projectId == nil ? "checkmark" : "tray")
+            }
+            .disabled(isMovingSession || session.projectId == nil)
         }
-        .disabled(isMovingSession || session.projectId == nil)
 
-        if !projects.isEmpty {
-            Divider()
+        if !targets.isEmpty {
+            if offersRemove {
+                Divider()
+            }
 
-            ForEach(projects) { project in
+            ForEach(targets) { project in
                 let projectID = project.projectId
                 let isSelected = session.projectId == projectID
                 let projectName = project.name.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Untitled Project")
@@ -1047,7 +1074,9 @@ struct SessionProjectMoveMenu: View {
             }
         }
 
-        Divider()
+        if offersRemove || !targets.isEmpty {
+            Divider()
+        }
 
         Button {
             actions.createProject(session)
@@ -1466,31 +1495,9 @@ struct ProjectFilterRow: View {
             .accessibilityValue(accessibilityValue)
             .accessibilityHint(isSelected ? "Clears this project filter." : "Filters sessions to this project.")
 
-            Menu {
-                Button {
-                    rename()
-                } label: {
-                    Label("Rename Project", systemImage: "pencil")
-                }
-                .disabled(projectActionsAreDisabled)
-
-                Button(role: .destructive) {
-                    delete()
-                } label: {
-                    Label("Delete Project", systemImage: "trash")
-                }
-                .disabled(projectActionsAreDisabled)
-            } label: {
-                Label(String(localized: "Project actions for \(displayName)"), systemImage: "ellipsis")
-                    .labelStyle(.iconOnly)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+            if SessionRowActionPolicy.offersProjectEditing(project) {
+                actionsMenu
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(String(localized: "Project actions for \(displayName)"))
-            .accessibilityHint("Shows rename and delete actions for this project.")
         }
         .background {
             if isSelected {
@@ -1502,6 +1509,34 @@ struct ProjectFilterRow: View {
                     }
             }
         }
+    }
+
+    private var actionsMenu: some View {
+        Menu {
+            Button {
+                rename()
+            } label: {
+                Label("Rename Project", systemImage: "pencil")
+            }
+            .disabled(projectActionsAreDisabled)
+
+            Button(role: .destructive) {
+                delete()
+            } label: {
+                Label("Delete Project", systemImage: "trash")
+            }
+            .disabled(projectActionsAreDisabled)
+        } label: {
+            Label(String(localized: "Project actions for \(displayName)"), systemImage: "ellipsis")
+                .labelStyle(.iconOnly)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(String(localized: "Project actions for \(displayName)"))
+        .accessibilityHint("Shows rename and delete actions for this project.")
     }
 
     private var displayName: String {

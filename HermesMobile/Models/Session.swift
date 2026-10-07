@@ -98,12 +98,28 @@ struct ProjectMutationResponse: Decodable, Equatable {
 }
 
 struct ProjectSummary: Decodable, Equatable, Hashable, Identifiable {
+    /// What a Hermes project lane (#1052) carries beyond a webui project. Never decoded: only
+    /// `HermesProjectTree` makes it.
+    struct Hermes: Hashable {
+        /// The primary folder, where Move to Project sends a session; nil when it has none.
+        let folder: String?
+        /// A per-repository project the host derives from sessions' folders. It has no record,
+        /// so it can't be renamed, deleted or moved into.
+        let isAutomatic: Bool
+        /// The host's count of its sessions, as Desktop shows it.
+        let sessionCount: Int
+        /// How many listed sessions the host named as its own, so a lane knows when it has them all.
+        let claimedCount: Int
+    }
+
     var id: String { projectId ?? name ?? UUID().uuidString }
 
     let projectId: String?
     let name: String?
     let color: String?
     let createdAt: Double?
+    /// Set only on a Hermes server's project.
+    let hermes: Hermes?
 
     enum CodingKeys: String, CodingKey {
         case projectId
@@ -112,12 +128,21 @@ struct ProjectSummary: Decodable, Equatable, Hashable, Identifiable {
         case createdAt
     }
 
+    init(projectId: String?, name: String?, color: String?, createdAt: Double? = nil, hermes: Hermes? = nil) {
+        self.projectId = projectId
+        self.name = name
+        self.color = color
+        self.createdAt = createdAt
+        self.hermes = hermes
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         projectId = container.decodeLossyStringIfPresent(forKey: .projectId)
         name = container.decodeLossyStringIfPresent(forKey: .name)
         color = container.decodeLossyStringIfPresent(forKey: .color)
         createdAt = container.decodeLossyDoubleIfPresent(forKey: .createdAt)
+        hermes = nil
     }
 }
 

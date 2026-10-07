@@ -81,7 +81,11 @@ struct SessionActionConfirmations: ViewModifier {
                     }
                 }
             } message: {
-                Text("Sessions in this project will be moved to No project. The sessions themselves will not be deleted.")
+                if projectPendingDeletion?.hermes != nil {
+                    Text("Sessions stay; only the project is removed.")
+                } else {
+                    Text("Sessions in this project will be moved to No project. The sessions themselves will not be deleted.")
+                }
             }
     }
 }

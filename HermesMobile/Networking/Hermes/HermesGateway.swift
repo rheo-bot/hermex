@@ -449,8 +449,8 @@ private extension HermesCall {
     /// because its outcome is unknown.
     var isCancellationSafe: Bool {
         switch self {
-        case .fileAttach, .completePath, .completeSlash, .subagentList, .subagentTail, .sessionActiveList,
-             .sessionMostRecent, .profilesList, .profileModelOptions: return true
+        case .fileAttach, .completePath, .completeFolder, .completeSlash, .subagentList, .subagentTail,
+             .sessionActiveList, .sessionMostRecent, .profilesList, .profileModelOptions, .projectsTree: return true
         default: return false
         }
     }
@@ -461,7 +461,7 @@ private extension HermesCall {
     var timesOutLocally: Bool {
         switch self {
         case .subagentList, .subagentTail, .sessionActiveList, .sessionMostRecent, .completeSlash, .slashExec,
-             .profileModelOptions: return true
+             .profileModelOptions, .projectsTree, .completeFolder: return true
         default: return false
         }
     }
@@ -483,14 +483,16 @@ private extension HermesCall {
     /// says what was wrong with it (#1013), a refused slash command (#1036), a refused
     /// `/title`, whose 4022 message names the session already using it (#1048), a refused
     /// rewind or `/undo`, whose 5008 message says why the host could not write the cut (#1049),
-    /// and a refused `/compress`, whose 5005 message says why the compaction failed (#1050).
+    /// a refused `/compress`, whose 5005 message says why the compaction failed (#1050), and a
+    /// refused project change or move, such as 5063 naming the project that has the folder (#1052).
     var rejection: Rejection {
         if method.hasPrefix("groups.") { return .room }
         switch self {
         case .configSet, .sessionCwdSet, .sessionControl, .modelOptions, .configuredModelOptions, .profileModelOptions,
              .sessionControlRead: return .setting
         case .commandDispatch(let name, _, _) where name == "goal": return .setting
-        case .slashExec, .sessionRename, .promptRewind, .sessionUndo, .sessionCompress: return .setting
+        case .slashExec, .sessionRename, .promptRewind, .sessionUndo, .sessionCompress, .sessionWorkspaceMove,
+             .projectsCreate, .projectsUpdate, .projectsDelete: return .setting
         default: return .plain
         }
     }

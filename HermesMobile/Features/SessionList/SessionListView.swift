@@ -296,7 +296,7 @@ struct SessionListView: View {
                     isSaving: viewModel.isCreatingProject || viewModel.isMovingSession
                 ) {
                     sessionPendingProjectCreation = nil
-                } onSave: { name, color in
+                } onSave: { name, color, _ in
                     Task {
                         let didMove = await viewModel.createProject(
                             named: name,
@@ -319,7 +319,7 @@ struct SessionListView: View {
                     isSaving: viewModel.isCreatingProject
                 ) {
                     isPresentingProjectCreation = false
-                } onSave: { name, color in
+                } onSave: { name, color, _ in
                     Task {
                         let didCreate = await viewModel.createEmptyProject(
                             named: name,

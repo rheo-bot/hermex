@@ -108,6 +108,12 @@ _Avoid_: Multi-select, bulk mode
 One execution of a Task. On a Hermes server it is a session `cron_<task>_<time>`, and its output is that session's final reply; on a webui server it is an output file.
 _Avoid_: job run, execution
 
+## Sessions
+
+**Project**:
+A named group of sessions in the session list. On a webui server it is a tag the session carries, which Move to Project sets. On a Hermes server it is a set of host folders: a session belongs to the project with the deepest folder its working folder sits in, the host groups the rest into automatic per-repository projects, and Move to Project changes the session's working folder.
+_Avoid_: tag (for a Hermes project), workspace
+
 ## Chat
 
 **Fork**:

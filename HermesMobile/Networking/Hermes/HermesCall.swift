@@ -57,6 +57,22 @@ enum HermesCall: Equatable, Sendable {
     /// refuses with 4023 while a runtime in its process holds the session; REST `DELETE` has
     /// no such check, so it is never used.
     case sessionDelete(profile: String, storedKey: String)
+    /// Move to Project (#1052): sets that exact stored session's working folder to `cwd` and
+    /// answers `{cwd, branch, git_repo_root}`. A runtime on it follows, even mid-turn. A folder
+    /// the host lacks is 4017.
+    case sessionWorkspaceMove(profile: String, storedKey: String, cwd: String)
+
+    // Projects (#1052): folder-based and per Profile. A session belongs to the project whose
+    // folder it works in, so membership is read, never written.
+    /// The Profile's project lanes: `{projects, active_id, scoped_session_ids}`. `active_id` is
+    /// Desktop's own pick and is never read.
+    case projectsTree(profile: String)
+    /// A project on one folder, its primary. A folder another project has as its primary is 5063.
+    case projectsCreate(profile: String, name: String, folder: String, color: String?)
+    /// Renames a project; a nil color leaves its color as it is.
+    case projectsUpdate(profile: String, id: String, name: String, color: String?)
+    /// Removes the project only: the sessions in its folders stay.
+    case projectsDelete(profile: String, id: String)
 
     // Turns
     /// Always `queued`: even an idle Send can race Desktop, so a fresh send never
@@ -110,6 +126,9 @@ enum HermesCall: Equatable, Sendable {
     case commandsCatalog(sessionID: String)
     case commandDispatch(name: String, argument: String, sessionID: String)
     case completePath(word: String, sessionID: String, profile: String)
+    /// `complete.path` for a host folder outside any session (#1052): `word` is a path from the
+    /// host's root or home (`HermesFolderCompletion.completes`), so no session's folder resolves it.
+    case completeFolder(word: String, profile: String)
     /// `complete.slash` at a command's argument stage (#1036): `text` is one `/name …` line
     /// with a space. The command stage is ranked on the phone from `commands.catalog`.
     case completeSlash(text: String, sessionID: String)
@@ -244,6 +263,11 @@ enum HermesCall: Equatable, Sendable {
         case .sessionTitle, .sessionRename: return "session.title"
         case .sessionClose: return "session.close"
         case .sessionDelete: return "session.delete"
+        case .sessionWorkspaceMove: return "session.workspace.move"
+        case .projectsTree: return "projects.tree"
+        case .projectsCreate: return "projects.create"
+        case .projectsUpdate: return "projects.update"
+        case .projectsDelete: return "projects.delete"
         case .sessionResume: return "session.resume"
         case .sessionEventsSince: return "session.events.since"
         case .sessionActiveList: return "session.active_list"
@@ -269,7 +293,7 @@ enum HermesCall: Equatable, Sendable {
         case .sessionControl: return "session.control"
         case .commandsCatalog: return "commands.catalog"
         case .commandDispatch: return "command.dispatch"
-        case .completePath: return "complete.path"
+        case .completePath, .completeFolder: return "complete.path"
         case .completeSlash: return "complete.slash"
         case .slashExec: return "slash.exec"
         case .insightsGet: return "insights.get"
@@ -321,6 +345,19 @@ enum HermesCall: Equatable, Sendable {
         case .sessionRename(let runtime, let title): return ["session_id": .string(runtime), "title": .string(title)]
         case .sessionClose(let runtime), .sessionUndo(let runtime): return ["session_id": .string(runtime)]
         case .sessionDelete(let profile, let storedKey): return ["session_id": .string(storedKey), "profile": .string(profile)]
+        case .sessionWorkspaceMove(let profile, let storedKey, let cwd):
+            return ["session_key": .string(storedKey), "cwd": .string(cwd), "profile": .string(profile)]
+        case .projectsTree(let profile): return ["profile": .string(profile)]
+        case .projectsCreate(let profile, let name, let folder, let color):
+            var params: [String: BotJSON] = ["profile": .string(profile), "name": .string(name),
+                                             "folders": .array([.string(folder)]), "primary_path": .string(folder)]
+            if let color { params["color"] = .string(color) }
+            return params
+        case .projectsUpdate(let profile, let id, let name, let color):
+            var params: [String: BotJSON] = ["profile": .string(profile), "id": .string(id), "name": .string(name)]
+            if let color { params["color"] = .string(color) }
+            return params
+        case .projectsDelete(let profile, let id): return ["profile": .string(profile), "id": .string(id)]
         case .sessionCompress(let runtime, let focus, let profile):
             var params: [String: BotJSON] = ["session_id": .string(runtime), "profile": .string(profile)]
             if let focus { params["focus_topic"] = .string(focus) }
@@ -393,6 +430,7 @@ enum HermesCall: Equatable, Sendable {
             return ["name": .string(name), "arg": .string(argument), "session_id": .string(sessionID)]
         case .completePath(let word, let sessionID, let profile):
             return ["word": .string(word), "session_id": .string(sessionID), "profile": .string(profile)]
+        case .completeFolder(let word, let profile): return ["word": .string(word), "profile": .string(profile)]
         case .completeSlash(let text, let sessionID): return ["text": .string(text), "session_id": .string(sessionID)]
         case .slashExec(let sessionID, let command): return ["session_id": .string(sessionID), "command": .string(command)]
         case .insightsGet(let days, let profile): return ["days": .number(Double(days)), "profile": .string(profile)]
@@ -427,6 +465,10 @@ enum HermesCall: Equatable, Sendable {
         HermesCompatibility.release(version)?.lexicographicallyPrecedes([0, 21, 5]) ?? false
     }
 
+    private static func isBlank(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// One line that opens with `/` and names something after it.
     private static func isSlashLine(_ text: String) -> Bool {
         text.count > 1 && text.hasPrefix("/") && !text.contains(where: \.isNewline)
@@ -454,6 +496,15 @@ enum HermesCall: Equatable, Sendable {
         case .sessionRename(let runtime, let title):
             valid = !runtime.isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .sessionDelete(let profile, let storedKey): valid = !profile.isEmpty && !storedKey.isEmpty
+        case .sessionWorkspaceMove(let profile, let storedKey, let cwd):
+            valid = !profile.isEmpty && !storedKey.isEmpty && !Self.isBlank(cwd)
+        case .projectsTree(let profile): valid = !profile.isEmpty
+        case .projectsCreate(let profile, let name, let folder, let color):
+            valid = !profile.isEmpty && !Self.isBlank(name) && !Self.isBlank(folder) && color?.isEmpty != true
+        case .projectsUpdate(let profile, let id, let name, let color):
+            valid = !profile.isEmpty && !id.isEmpty && !Self.isBlank(name) && color?.isEmpty != true
+        case .projectsDelete(let profile, let id): valid = !profile.isEmpty && !id.isEmpty
+        case .completeFolder(let word, let profile): valid = HermesFolderCompletion.completes(word) && !profile.isEmpty
         case .configSet(let sessionID, _, let setting):
             switch setting {
             case .model(let value, _): valid = !sessionID.isEmpty && value.hasSuffix(" --session")

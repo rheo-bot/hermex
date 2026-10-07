@@ -96,13 +96,14 @@ struct HermesSessionRow: Decodable, Equatable {
     /// The row as the session list shows it, in `profile` unless the row names its own. Its
     /// title and preview drop the reference lines a Hermex send appends
     /// (`MessageAttachment.hermesTitle`); the host keeps its own text. A Bot Chat names its bot's
-    /// Profile, as "Bot Chat · <Profile>", since every bot's has the same title.
-    func summary(in profile: String) -> SessionSummary {
+    /// Profile, as "Bot Chat · <Profile>", since every bot's has the same title. `project` is the
+    /// project lane that claims it (`HermesProjectTree`, #1052).
+    func summary(in profile: String, project: String? = nil) -> SessionSummary {
         let profile = self.profile.flatMap { $0.isEmpty ? nil : $0 } ?? profile
         return SessionSummary(
             sessionId: id, title: isBotChat ? String(localized: "Bot Chat · \(profile)") : MessageAttachment.hermesTitle(title),
             workspace: cwd, model: model, messageCount: messageCount, createdAt: startedAt, lastMessageAt: lastActive,
-            pinned: pinned, archived: archived, profile: profile, parentSessionId: parentSessionID,
+            pinned: pinned, archived: archived, projectId: project, profile: profile, parentSessionId: parentSessionID,
             hermes: SessionSummary.Hermes(lineageRoot: identity, unread: unread == true,
                                           preview: MessageAttachment.hermesTitle(preview))
         )

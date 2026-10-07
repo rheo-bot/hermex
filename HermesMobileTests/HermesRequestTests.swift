@@ -50,6 +50,20 @@ final class HermesRequestTests: XCTestCase {
             (.sessionClose(runtime: "runtime"), "session.close", ["session_id": .string("runtime")]),
             (.sessionDelete(profile: "triage", storedKey: "tip"), "session.delete",
              ["session_id": .string("tip"), "profile": .string("triage")]),
+            (.sessionWorkspaceMove(profile: "triage", storedKey: "tip", cwd: "/work"), "session.workspace.move",
+             ["session_key": .string("tip"), "cwd": .string("/work"), "profile": .string("triage")]),
+            (.projectsTree(profile: "triage"), "projects.tree", ["profile": .string("triage")]),
+            (.projectsCreate(profile: "triage", name: "Launch", folder: "/work", color: "#7cb9ff"), "projects.create",
+             ["profile": .string("triage"), "name": .string("Launch"), "folders": .array([.string("/work")]),
+              "primary_path": .string("/work"), "color": .string("#7cb9ff")]),
+            (.projectsCreate(profile: "triage", name: "Launch", folder: "/work", color: nil), "projects.create",
+             ["profile": .string("triage"), "name": .string("Launch"), "folders": .array([.string("/work")]),
+              "primary_path": .string("/work")]),
+            (.projectsUpdate(profile: "triage", id: "p_1", name: "Launch", color: "#f5c542"), "projects.update",
+             ["profile": .string("triage"), "id": .string("p_1"), "name": .string("Launch"), "color": .string("#f5c542")]),
+            (.projectsUpdate(profile: "triage", id: "p_1", name: "Launch", color: nil), "projects.update",
+             ["profile": .string("triage"), "id": .string("p_1"), "name": .string("Launch")]),
+            (.projectsDelete(profile: "triage", id: "p_1"), "projects.delete", ["profile": .string("triage"), "id": .string("p_1")]),
             (.sessionResume(profile: "triage", sessionID: "tip", omitMessages: false), "session.resume",
              ["profile": .string("triage"), "session_id": .string("tip"), "close_on_disconnect": .bool(false)]),
             (.sessionResume(profile: "triage", sessionID: "tip", omitMessages: true), "session.resume",
@@ -113,6 +127,8 @@ final class HermesRequestTests: XCTestCase {
              ["name": .string("work"), "arg": .string("fix it"), "session_id": .string("runtime")]),
             (.completePath(word: "src", sessionID: "runtime", profile: "triage"), "complete.path",
              ["word": .string("src"), "session_id": .string("runtime"), "profile": .string("triage")]),
+            (.completeFolder(word: "~/src/ap", profile: "triage"), "complete.path",
+             ["word": .string("~/src/ap"), "profile": .string("triage")]),
             (.completeSlash(text: "/approvals ", sessionID: "runtime"), "complete.slash",
              ["text": .string("/approvals "), "session_id": .string("runtime")]),
             (.slashExec(sessionID: "runtime", command: "/context all"), "slash.exec",
@@ -170,6 +186,29 @@ final class HermesRequestTests: XCTestCase {
         XCTAssertThrowsError(try HermesCall.sessionCompress(runtime: "runtime", focus: " \n", profile: "triage").params())
         XCTAssertThrowsError(try HermesCall.sessionNew(profile: "triage", cwd: "").params())
         XCTAssertThrowsError(try HermesCall.sessionNew(profile: "triage", model: .init(id: "gpt-6", provider: "")).params())
+    }
+
+    /// A project names its Profile, a name and a folder, and a move a stored session and a
+    /// folder; a folder is completed only from the host's root or home (#1052).
+    func testProjectAndMoveCallsRefuseBlankValues() {
+        let refused: [HermesCall] = [
+            .projectsTree(profile: ""),
+            .projectsCreate(profile: "triage", name: " ", folder: "/work", color: nil),
+            .projectsCreate(profile: "triage", name: "Launch", folder: "", color: nil),
+            .projectsCreate(profile: "triage", name: "Launch", folder: "/work", color: ""),
+            .projectsUpdate(profile: "triage", id: "p_1", name: "", color: nil),
+            .projectsUpdate(profile: "triage", id: "", name: "Launch", color: nil),
+            .projectsDelete(profile: "triage", id: ""),
+            .sessionWorkspaceMove(profile: "triage", storedKey: "", cwd: "/work"),
+            .sessionWorkspaceMove(profile: "triage", storedKey: "tip", cwd: " "),
+            .sessionWorkspaceMove(profile: "", storedKey: "tip", cwd: "/work"),
+            .completeFolder(word: "src/app", profile: "triage"),
+            .completeFolder(word: "~", profile: "triage"),
+            .completeFolder(word: "/work", profile: "")
+        ]
+        for call in refused {
+            XCTAssertThrowsError(try call.params(), "\(call)")
+        }
     }
 
     /// Slash commands go out one typed line at a time, and completion only at a command's

@@ -3118,14 +3118,15 @@ final class SessionListMutationTests: XCTestCase {
         XCTAssertTrue(requestedPaths.isEmpty)
     }
 
-    /// A Hermes row (#1048) offers pin, rename, archive, delete and Export as JSON. Duplicate and
-    /// Move wait on later slices of #702; the host has no HTML export, and Hermes deep links are #706.
-    func testAHermesRowOffersItsActionsButNotDuplicateMoveHTMLOrDeeplink() {
+    /// A Hermes row (#1048) offers pin, rename, archive, delete, Export as JSON and Move to Project
+    /// (#1052). Duplicate waits on a later slice of #702; the host has no HTML export, and Hermes
+    /// deep links are #706.
+    func testAHermesRowOffersItsActionsButNotDuplicateHTMLOrDeeplink() {
         let row = HermesSessionRow(id: "20261005_101500_a1b2c3").summary(in: "default")
 
         XCTAssertTrue(SessionRowActionPolicy.offersMutationActions(for: row))
         XCTAssertFalse(SessionRowActionPolicy.canDuplicate(row))
-        XCTAssertFalse(SessionRowActionPolicy.offersProjectMove(for: row))
+        XCTAssertTrue(SessionRowActionPolicy.offersProjectMove(for: row))
         XCTAssertEqual(SessionRowActionPolicy.exportFormats(for: row), [.json])
         XCTAssertNil(SessionRowActionPolicy.deepLinkURL(for: row, isViewingCachedData: false, isMutating: false))
 
@@ -3133,6 +3134,30 @@ final class SessionListMutationTests: XCTestCase {
         XCTAssertTrue(SessionRowActionPolicy.offersProjectMove(for: webui))
         XCTAssertEqual(SessionRowActionPolicy.exportFormats(for: webui), [.html, .json])
         XCTAssertNotNil(SessionRowActionPolicy.deepLinkURL(for: webui, isViewingCachedData: false, isMutating: false))
+    }
+
+    /// A Hermes session always works in some folder, so its Move menu has no "No project", and
+    /// moves only into the user's own projects with a folder. An automatic per-repository
+    /// project has no record, so it offers neither rename nor delete (#1052). webui projects
+    /// are unchanged.
+    func testHermesProjectMenusOfferNoRemoveAndKeepAutomaticProjectsReadOnly() {
+        let hermesRow = HermesSessionRow(id: "a").summary(in: "default")
+        let user = ProjectSummary(projectId: "p_1", name: "Launch", color: nil, hermes: .init(
+            folder: "/Users/me/launch", isAutomatic: false, sessionCount: 0, claimedCount: 0))
+        let automatic = ProjectSummary(projectId: "/Users/me/src/app", name: "app", color: nil, hermes: .init(
+            folder: "/Users/me/src/app", isAutomatic: true, sessionCount: 3, claimedCount: 3))
+        let folderless = ProjectSummary(projectId: "p_2", name: "Ideas", color: nil, hermes: .init(
+            folder: nil, isAutomatic: false, sessionCount: 0, claimedCount: 0))
+
+        XCTAssertFalse(SessionRowActionPolicy.offersRemoveFromProject(for: hermesRow))
+        XCTAssertEqual(SessionRowActionPolicy.moveTargets([user, automatic, folderless]), [user])
+        XCTAssertTrue(SessionRowActionPolicy.offersProjectEditing(user))
+        XCTAssertFalse(SessionRowActionPolicy.offersProjectEditing(automatic))
+
+        let webuiProject = ProjectSummary(projectId: "web", name: "Web", color: nil)
+        XCTAssertTrue(SessionRowActionPolicy.offersRemoveFromProject(for: SessionSummary(sessionId: "webui")))
+        XCTAssertEqual(SessionRowActionPolicy.moveTargets([webuiProject]), [webuiProject])
+        XCTAssertTrue(SessionRowActionPolicy.offersProjectEditing(webuiProject))
     }
 
     func testCopyDeepLinkUsesExportAvailabilityRules() throws {

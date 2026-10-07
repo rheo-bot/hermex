@@ -178,6 +178,13 @@ final class SessionListViewModel {
     @ObservationIgnored private var hermesRetriesStatus = false
     /// Sessions a chat opened from this list has just closed.
     @ObservationIgnored private var hermesReturnedFrom: Set<String> = []
+    /// The project lane that claims each listed session, by session id, from the last
+    /// `projects.tree` (#1052).
+    @ObservationIgnored private var hermesProjectOwners: [String: String] = [:]
+    /// The Profile's lanes were read once, so a read shows "Loading projects..." only before that.
+    @ObservationIgnored private var hermesProjectsRead = false
+    /// The host's reason for refusing the open project sheet's create or rename (#1052).
+    private(set) var projectSheetErrorMessage: String?
 
     /// `hermes` makes this a Hermes server's list; nothing then reaches the webui API.
     init(server: URL, client: APIClient? = nil, unreadStore: SessionUnreadStore = SessionUnreadStore(),
@@ -1360,6 +1367,7 @@ final class SessionListViewModel {
             actionErrorMessage = String(localized: "The server did not provide a project ID.")
             return false
         }
+        if project.hermes != nil { return await deleteHermesProject(projectID) }
 
         isDeletingProject = true
         actionErrorMessage = nil
@@ -1394,6 +1402,7 @@ final class SessionListViewModel {
             actionErrorMessage = String(localized: "Enter a project name.")
             return false
         }
+        if project.hermes != nil { return await renameHermesProject(projectID, named: name, color: color) }
 
         isRenamingProject = true
         defer { isRenamingProject = false }
@@ -1770,7 +1779,7 @@ final class SessionListViewModel {
     }
 
     /// Reads as many pages as the list holds, plus the page a "Load more" it replaces was
-    /// reading, and applies them only if no newer read began.
+    /// reading, and applies them only if no newer read began; then the Profile's project lanes.
     private func reloadHermes() async {
         guard let wire = hermesWire, let profile = hermesProfile else { return }
         hermesReadSerial += 1
@@ -1791,7 +1800,11 @@ final class SessionListViewModel {
                 pages.append(page)
             }
             applyHermes(pages, readSerial: serial)
+            // The rows are in, and the lanes, read next, never hold them back.
+            isLoading = false
+            if isLoadingMoreSessions { isLoadingMoreSessions = false }
             startHermesStatusRead(wire)
+            await readHermesProjects(wire, readSerial: serial)
         } catch {
             guard serial == hermesReadSerial, hermesWire === wire, !Task.isCancelled else { return }
             // The client left the socket without a word (a call its screen cancelled): reconnect.
@@ -1808,7 +1821,7 @@ final class SessionListViewModel {
         // A mark the host had already taken when this read began is the host's own now.
         let marks = hermesUnreadMarks.filter { $0.value.settledBefore.map { $0 > readSerial } ?? true }
         if marks.count != hermesUnreadMarks.count { hermesUnreadMarks = marks }
-        let rows = pages.rows.map { $0.summary(in: profile) }
+        let rows = hermesRows(pages, in: profile)
         // By the host's own mark: one this phone wrote as the chat opened came before the reply.
         for row in rows where row.sessionId.map(hermesReturnedFrom.contains) == true && row.hermes?.unread == true {
             setHermesUnread(false, row)
@@ -1816,6 +1829,11 @@ final class SessionListViewModel {
         hermesReturnedFrom = []
         if sessions != rows { sessions = rows }
         errorMessage = nil; sessionLoadError = nil
+    }
+
+    /// The rows `pages` hold, each in the project lane that claims it.
+    private func hermesRows(_ pages: HermesSessionPages, in profile: String) -> [SessionSummary] {
+        pages.rows.map { $0.summary(in: profile, project: hermesProjectOwners[$0.id]) }
     }
 
     private func showHermesFailure(_ error: Error) {
@@ -1872,6 +1890,7 @@ final class SessionListViewModel {
         hermesReadSerial += 1
         sessions = []; hasMoreSessions = false; isLoadingMoreSessions = false
         hermesUnreadMarks = [:]; hermesReturnedFrom = []
+        projects = []; hermesProjectOwners = [:]; hermesProjectsRead = false
         errorMessage = nil; sessionLoadError = nil
         setHermesStates([:])
         guard let wire = hermesWire else { return await openHermes() }
@@ -1889,6 +1908,7 @@ final class SessionListViewModel {
         hermesPages = HermesSessionPages()
         sessions = []; hasMoreSessions = false
         hermesUnreadMarks = [:]; hermesReturnedFrom = []
+        projects = []; hermesProjectOwners = [:]; hermesProjectsRead = false
         setHermesStates([:])
         isLoading = true
         return true
@@ -2111,7 +2131,7 @@ final class SessionListViewModel {
     private func showHermesPages(_ pages: HermesSessionPages, animation: Animation?) {
         guard let profile = hermesProfile else { return }
         hermesPages = pages
-        let rows = pages.rows.map { $0.summary(in: profile) }
+        let rows = hermesRows(pages, in: profile)
         guard rows != sessions else { return }
         if let animation { withAnimation(animation) { sessions = rows } } else { sessions = rows }
     }
@@ -2126,6 +2146,146 @@ final class SessionListViewModel {
         if let refusal = error as? HermesSessionRefusal { return refusal.message }
         if error is URLError, let hermes { return BotConnectionAdvice.message(for: error, address: hermes.connection.address) }
         return error.localizedDescription
+    }
+
+    // MARK: Hermes projects (#1052)
+
+    /// Whether the lane `projectID` shows fewer of its sessions than the host named for it, so
+    /// later pages hold the rest.
+    func hermesLaneIsShort(_ projectID: String) -> Bool {
+        guard let claimed = projects.first(where: { $0.projectId == projectID })?.hermes?.claimedCount else { return false }
+        return sessions.lazy.filter { $0.projectId == projectID }.count < claimed
+    }
+
+    /// Reads pages until the lane `projectID` holds every session the host named for it, or the
+    /// list ends. A failed or replaced read stops, and "Load more" tries again.
+    func fillHermesLane(_ projectID: String) async {
+        while hermesLaneIsShort(projectID), hasMoreSessions, !isLoadingMoreSessions {
+            let offset = hermesPages.nextOffset
+            await loadMoreHermesSessions()
+            guard hermesPages.nextOffset > offset else { return }
+        }
+    }
+
+    /// The host's folders that complete `word` in the create sheet's folder field; none when it
+    /// can't be completed or the host doesn't answer.
+    func completeHermesFolder(_ word: String) async -> [String] {
+        guard HermesFolderCompletion.completes(word), let wire = hermesWire, let profile = hermesProfile,
+              let reply = try? await wire.call(.completeFolder(word: word, profile: profile)) else { return [] }
+        return HermesFolderCompletion.folders(from: reply, typed: word)
+    }
+
+    func clearProjectSheetError() {
+        projectSheetErrorMessage = nil
+    }
+
+    /// Creates a project on one host folder, its primary. Sessions working in that folder join
+    /// it, so the lanes are read again. The host's refusal, such as a folder another project
+    /// already has, stays in the sheet.
+    func createHermesProject(named rawName: String, color: String, folder rawFolder: String) async -> Bool {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var folder = rawFolder.trimmingCharacters(in: .whitespacesAndNewlines)
+        while folder.count > 1, folder.hasSuffix("/") { folder.removeLast() }
+        guard let wire = hermesWire, let profile = hermesProfile else {
+            projectSheetErrorMessage = hermesActionFailure(BotFailure.transport)
+            return false
+        }
+        isCreatingProject = true
+        projectSheetErrorMessage = nil
+        defer { isCreatingProject = false }
+        do {
+            _ = try await wire.call(.projectsCreate(profile: profile, name: name, folder: folder, color: color))
+            await readHermesProjects(wire, readSerial: hermesReadSerial)
+            return true
+        } catch {
+            if !Task.isCancelled { projectSheetErrorMessage = hermesActionFailure(error) }
+            return false
+        }
+    }
+
+    private func renameHermesProject(_ id: String, named name: String, color: String?) async -> Bool {
+        guard let wire = hermesWire, let profile = hermesProfile else {
+            projectSheetErrorMessage = hermesActionFailure(BotFailure.transport)
+            return false
+        }
+        isRenamingProject = true
+        projectSheetErrorMessage = nil
+        defer { isRenamingProject = false }
+        do {
+            _ = try await wire.call(.projectsUpdate(profile: profile, id: id, name: name,
+                                                    color: color.flatMap { $0.isEmpty ? nil : $0 }))
+            await readHermesProjects(wire, readSerial: hermesReadSerial)
+            return true
+        } catch {
+            if !Task.isCancelled { projectSheetErrorMessage = hermesActionFailure(error) }
+            return false
+        }
+    }
+
+    /// Removes the project only: its sessions stay in the list, now in whichever lane claims
+    /// their folders. The reply's `active_id` is Desktop's pick and can still name the deleted
+    /// project, so it is never read.
+    private func deleteHermesProject(_ id: String) async -> Bool {
+        guard let wire = hermesWire, let profile = hermesProfile else {
+            showHermesActionFailure(BotFailure.transport)
+            return false
+        }
+        isDeletingProject = true
+        actionErrorMessage = nil
+        defer { isDeletingProject = false }
+        do {
+            _ = try await wire.call(.projectsDelete(profile: profile, id: id))
+            await readHermesProjects(wire, readSerial: hermesReadSerial)
+            return true
+        } catch {
+            if !Task.isCancelled { showHermesActionFailure(error) }
+            return false
+        }
+    }
+
+    /// Move to Project: the host sets the session's working folder to `folder`, where Hermes
+    /// works from then on; its files stay where they are. A busy session moves too, mid-turn.
+    /// The list reads again, so the row shows in the lane that claims its new folder. Returns
+    /// the folder it left, which Undo moves it back to; nil when it didn't move or had none.
+    func moveHermesSession(_ session: SessionSummary, toFolder folder: String) async -> String? {
+        guard let target = hermesTarget(session), beginSessionMutation(target.key) else { return nil }
+        let (wire, key, profile) = target
+        let left = (sessions.first { $0.sessionId == key } ?? session).workspace
+        defer { endSessionMutation(key) }
+        isMovingSession = true
+        actionErrorMessage = nil
+        defer { isMovingSession = false }
+        do {
+            _ = try await wire.call(.sessionWorkspaceMove(profile: profile, storedKey: key, cwd: folder))
+            requestHermesReload()
+            return left.flatMap { $0.isEmpty || $0 == folder ? nil : $0 }
+        } catch BotSettingFailure.rejected(4017, _) {
+            actionErrorMessage = String(localized: "Hermes can't find the folder \(folder), so the session didn't move.")
+            return nil
+        } catch {
+            // A reply lost with the list's client (`.stale`) may have moved it: the next read shows.
+            requestHermesReload()
+            if !Task.isCancelled, error as? BotFailure != .stale { showHermesActionFailure(error) }
+            return nil
+        }
+    }
+
+    /// Reads the Profile's project lanes and shows each listed row in the lane that claims it.
+    /// Only a read still current applies; a failed one keeps the last lanes, which only filter
+    /// the list.
+    private func readHermesProjects(_ wire: any BotTransport, readSerial serial: Int) async {
+        guard let profile = hermesProfile else { return }
+        let showsLoading = !hermesProjectsRead
+        if showsLoading { isLoadingProjects = true }
+        defer { if showsLoading { isLoadingProjects = false } }
+        let reply = try? await wire.call(.projectsTree(profile: profile))
+        guard serial == hermesReadSerial, hermesWire === wire, hermesProfile == profile else { return }
+        hermesProjectsRead = true
+        guard let reply else { return }
+        let tree = HermesProjectTree(reply: reply)
+        hermesProjectOwners = tree.owners
+        if projects != tree.projects { projects = tree.projects }
+        showHermesPages(hermesPages, animation: nil)
     }
 
     private func mutate(

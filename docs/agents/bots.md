@@ -1199,9 +1199,9 @@ inbox stops on (`BotConnectionAdvice.isRetryable`); pull to refresh tries again.
 ### Row actions (#1048)
 
 A Hermes row's menu and swipes rename, pin, archive, delete and Export as JSON
-(`SessionRowActionPolicy`). Duplicate and Move to Project wait on later slices of #702; the
-host has no HTML export, and Hermes deep links are #706. Each action goes to the row's own
-Profile.
+(`SessionRowActionPolicy`), and Move to Project (below). Duplicate waits on a later slice of
+#702; the host has no HTML export, and Hermes deep links are #706. Each action goes to the row's
+own Profile.
 
 - **Pin, archive and rename** are `PATCH /api/sessions/{id}` with one field and `profile` in
   the body (`HermesSessionChange`). `pinned` and `archived` apply across the compression
@@ -1234,6 +1234,39 @@ Contract checked against `scripts/local-hermes` at the `HERMES_AGENT_TESTED_SHA`
 (`ca678285`, 0.21.5): `hermes_cli/web_routers/sessions.py` (`rename_session_endpoint`,
 `export_session_endpoint`) and `tui_gateway/methods_session.py` (`session.delete`,
 `session.close`, `session.title`).
+
+### Projects (#1052)
+
+A Hermes project is a set of host folders, per Profile (`$HERMES_HOME/projects.db`), never a
+tag: a session belongs to the project with the deepest folder its `cwd` or git root sits in,
+and the host derives that. The list's Projects rows are `projects.tree {profile}`, read after
+every list read (so on `sessions.changed` too) and after a project change: the user's projects,
+then the automatic per-repository ones (`isAuto`), as Desktop shows them; the "No project"
+bucket (`isNoProject`) is the unfiltered list. A failed read keeps the last rows. Each row's
+count is the host's `sessionCount`. Picking one filters the list to the rows in that node's
+`sessionIds` (the REST rows, so pinned and unread stay), and pages on until the lane holds every
+listed id or the list ends (`HermesProjectTree`, `fillHermesLane`). `active_id` is Desktop's own
+pick and can name a deleted project, so it is never read.
+
+- **New Project** (the Projects + and a row's Move menu) is `projects.create {profile, name,
+  folders: [folder], primary_path: folder, color}`. The sheet's required folder field completes
+  host paths from `/` or `~/` with `complete.path {word, profile}`, outside any session, building
+  each suggestion from the item's `display`; from a row's Move menu it starts on that session's
+  `cwd`. A folder another project has as its primary is 5063, whose message names that project
+  and stays in the sheet.
+- **Rename and recolor** are `projects.update {profile, id, name, color?}`; **Delete** is
+  `projects.delete {profile, id}`, a hard delete that leaves the sessions alone ("Sessions stay;
+  only the project is removed."). An automatic project has no record, so it offers neither.
+- **Move to Project** lists the user's projects with a primary folder, and asks first: Hermes
+  works in that folder from then on, files aren't moved, and a busy session's running reply
+  moves too. It is `session.workspace.move {session_key, cwd, profile}` on the stored id, which
+  works with no runtime and moves a live one mid-turn; the reply is `{cwd, branch,
+  git_repo_root}`. "Moved · Undo" moves it back to the `cwd` it left. A folder the host lacks is
+  4017 and says so. There is no "No project": a folder has no none.
+
+Checked against `scripts/local-hermes` at the pin: `tui_gateway/methods_projects.py`,
+`methods_config.py` (`projects.tree`), `project_tree.py` (`build_tree`), `methods_complete.py`
+(`complete.path`) and `methods_session.py` (`session.workspace.move`).
 
 ## Tasks on a Hermes host
 
