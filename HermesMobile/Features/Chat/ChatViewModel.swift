@@ -221,7 +221,7 @@ final class ChatViewModel {
     private(set) var messages: [ChatMessage] = [] {
         didSet {
             recomputeDisplayedTranscriptMessages()
-            if hermesTurn != nil { updateHermesRewindableMessageIDs() }
+            if hermesTurn != nil, !Self.onlyRepliesChanged(from: oldValue, to: messages) { updateHermesRewindableMessageIDs() }
         }
     }
     /// A Hermes session's rows that offer Edit or Regenerate (#1049). Reassigned only when
@@ -243,6 +243,8 @@ final class ChatViewModel {
     private(set) var isForkingMessage = false
     private(set) var isEditingMessage = false
     private(set) var isRegeneratingMessage = false
+    /// A Hermes `/undo` is out (#1049). Send waits, since each one removes an exchange for good.
+    private(set) var isUndoingExchange = false
     private(set) var isCompressingSession = false
     private(set) var isCancellingStream = false
     private(set) var isViewingCachedData = false
@@ -5341,6 +5343,9 @@ final class ChatViewModel {
     private func undoHermesExchange(on hermes: HermesChatTurnCoordinator) async -> SlashCommandExecutionResult {
         let reconnect = String(localized: "Reconnect to the server to undo messages.")
         guard !isHermesSubmissionUncertain else { return notDelivered(reconnect) }
+        guard !isUndoingExchange else { return notDelivered(String(localized: "Wait for the current reply to finish.")) }
+        isUndoingExchange = true
+        defer { isUndoingExchange = false }
         sendErrorMessage = nil
         do {
             try await hermes.undo()
@@ -5418,6 +5423,17 @@ final class ChatViewModel {
             if rewindable, message.role == "assistant" || Self.opensHermesTurn(message) { ids.insert(message.id) }
         }
         if ids != hermesRewindableMessageIDs { hermesRewindableMessageIDs = ids }
+    }
+
+    /// Whether only replies' text changed, row for row, as a stream tick does. A reply offers
+    /// Regenerate by its id and its prompt alone, so the rewindable rows stay as they were.
+    private nonisolated static func onlyRepliesChanged(from old: [ChatMessage], to new: [ChatMessage]) -> Bool {
+        guard old.count == new.count else { return false }
+        for (before, after) in zip(old, new) where before != after {
+            let sameReply = before.role == "assistant" && after.role == "assistant"
+            guard sameReply, let id = before.messageId, id == after.messageId else { return false }
+        }
+        return true
     }
 
     /// A user row that opens a turn; a steer belongs to the turn it steers.

@@ -490,7 +490,8 @@ struct ChatView: View {
                 }
             ),
             // A Hermes prompt whose answer was lost holds Send until the chat reattaches (#508).
-            isSending: viewModel.isStartingChat || viewModel.isSendingVoiceNote || viewModel.isHermesSubmissionUncertain,
+            isSending: viewModel.isStartingChat || viewModel.isSendingVoiceNote || viewModel.isHermesSubmissionUncertain
+                || viewModel.isUndoingExchange,
             isCompressingSession: viewModel.isCompressingSession,
             isWaitingForStream: viewModel.activeStreamID != nil,
             isCancellingStream: viewModel.isCancellingStream,

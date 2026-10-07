@@ -358,7 +358,8 @@ Once the host answers `streaming`, the prompt shows where the cut was, the cut r
 cards go, and the turn's end re-reads the newest rows. The dropped rows are soft-archived
 (`active=0`): no client shows them again and no call restores them, so the discard warning says
 so. `/undo` is `session.undo {session_id: <runtime>}` → `{removed}`, then a newest-page read
-replaces the transcript. 4009 (busy) asks to wait, 4018 (a row cut elsewhere) says
+replaces the transcript; Send waits until it settles, since a second one would remove another
+exchange. 4009 (busy) asks to wait, 4018 (a row cut elsewhere) says
 the message can't be changed, and any other refusal shows the host's message (5008 is a failed
 write). Each is sent once: a lost or unreadable answer holds Send and reattaches, whose rebuild
 shows what the host did (#508). A failed edit's text goes back to the composer, after any draft.

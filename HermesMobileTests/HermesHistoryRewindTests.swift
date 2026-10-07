@@ -192,6 +192,22 @@ import Observation
         XCTAssertEqual(chat.writes("slash.exec"), [], "never the host's own /undo")
     }
 
+    /// Each `/undo` removes an exchange for good, so a second one while the first is out is
+    /// refused, never sent.
+    func testASecondUndoIsRefusedWhileTheFirstIsOut() async {
+        let chat = await openChat(threeTurns)
+        chat.host.always("session.undo", .init(result: .object(["removed": .number(2)])))
+        chat.transcript.rows = Array(threeTurns.prefix(4))
+
+        let other = Task { await chat.model.runHermesSlashCommand("/undo") }
+        let results = [await chat.model.runHermesSlashCommand("/undo"), await other.value]
+
+        XCTAssertEqual(results.filter { $0 == .executed(message: nil) }.count, 1)
+        XCTAssertEqual(results.filter { $0 == .notDelivered }.count, 1)
+        XCTAssertEqual(chat.writes("session.undo").count, 1)
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [1, 2, 3, 4])
+    }
+
     // MARK: Fixture
 
     private static let connection = BotConnection(id: UUID(), name: "Mac", address: URL(string: "http://hermes.local:9120")!,
