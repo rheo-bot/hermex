@@ -6713,6 +6713,32 @@ final class ChatViewModel {
         return max(0, offset - index)
     }
 
+    /// `rows`, the host's, with this Hermes chat's own rows from `shown` where they sat (#1013):
+    /// background cards and local slash output, such as a goal's notice, which the host's
+    /// history never holds. Each follows the row it followed, comes first when it followed
+    /// none, and comes last when that row is gone, as a streamed row is once it takes its saved
+    /// id. So a turn's end moves no row.
+    private static func hermesKeepingOwnRows(of shown: [ChatMessage], in rows: [ChatMessage]) -> [ChatMessage] {
+        var own: [(after: String?, row: ChatMessage)] = []
+        var previous: String?
+        for message in shown {
+            if message.messageId?.hasPrefix(hermesBackgroundCardPrefix) == true || message.role?.hasPrefix("local_") == true {
+                own.append((previous, message))
+            } else {
+                previous = message.messageId ?? "" // A row without an id is never found again.
+            }
+        }
+        guard !own.isEmpty else { return rows }
+        var following: [String: [ChatMessage]] = [:]
+        for (after, row) in own { if let after { following[after, default: []].append(row) } }
+        var next = own.filter { $0.after == nil }.map(\.row)
+        for row in rows {
+            next.append(row)
+            if let id = row.messageId, let mine = following.removeValue(forKey: id) { next += mine }
+        }
+        return next + own.filter { $0.after.map { following[$0] != nil } == true }.map(\.row)
+    }
+
     /// A Hermes background task's transcript card (#1013): the webui's result card, saying
     /// the task runs until its result, or that the result is unavailable.
     private static func hermesBackgroundCard(_ task: HermesBackgroundTask, timestamp: Double?) -> ChatMessage {
@@ -7064,12 +7090,8 @@ extension ChatViewModel: HermesChatTurnDelegate {
 
     func hermesReplaceTranscript(_ transcript: HermesChatTranscript) {
         resetPendingStreamingContentBuffers()
-        // Background cards and local slash output (a goal's notice) are this chat's own; the
-        // host's history has none of them, so they stay, after it.
-        let ownRows = messages.filter {
-            $0.messageId?.hasPrefix(Self.hermesBackgroundCardPrefix) == true || $0.role?.hasPrefix("local_") == true
-        }
-        let next = transcript.messages + transcript.live + ownRows + (transcript.streamingReply.map { [$0] } ?? [])
+        let next = Self.hermesKeepingOwnRows(of: messages, in: transcript.messages + transcript.live)
+            + (transcript.streamingReply.map { [$0] } ?? [])
         messagesOffset = Self.hermesMessagesOffset(keeping: messages, at: messagesOffset, in: next)
         messages = next
         transcriptRevision &+= 1
@@ -7089,10 +7111,11 @@ extension ChatViewModel: HermesChatTurnDelegate {
     }
 
     func hermesPrependHistory(_ transcript: HermesChatTranscript) {
-        // The settled rows lead the transcript; what follows them (the running turn, rows the
-        // host has not saved, background cards) stays, with the live tool and reasoning cards.
-        let following = messages.drop { $0.rowID != nil }
-        let next = transcript.messages + following
+        // Only the older page's rows are new, and they go in front. Every row shown (the
+        // running turn, rows the host has not saved, the chat's own rows) stays as it is, with
+        // the live tool and reasoning cards.
+        let shown = Set(messages.compactMap(\.messageId))
+        let next = Array(transcript.messages.prefix { $0.messageId.map(shown.contains) != true }) + messages
         messagesOffset = Self.hermesMessagesOffset(keeping: messages, at: messagesOffset, in: next)
         messages = next
         transcriptRevision &+= 1

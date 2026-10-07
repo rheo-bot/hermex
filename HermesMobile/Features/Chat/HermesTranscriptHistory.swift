@@ -1,43 +1,68 @@
 import Foundation
 
 /// A Hermes session's settled history as its REST transcript pages bring it (#1047): display
-/// rows in the host's order, the newest page first, older pages put in front. A row's `id` is
+/// rows in the host's order, the newest rows first, older pages put in front. A row's `id` is
 /// the host's `messages.id`. It names the row on every page, but ids do not follow display
 /// order (a compaction re-inserts the session's first rows under new ids), so pages join by
 /// position and repeat rows drop by id. `offset` counts display rows back from the newest, so
-/// rows added since a page was read shift the next one, which the id check absorbs.
+/// rows the host saved since the newest rows were taken shift every older page: the chat takes
+/// the newest rows again, or counts them while a turn runs, before it pages back.
 struct HermesTranscriptHistory: Equatable {
     private(set) var rows: [BotJSON] = []
     /// Earlier rows remain on the host: the last page read was a full one.
     private(set) var hasOlder = false
     private var ids: Set<Int> = []
+    /// Rows the host saved after the newest row held, as last counted: a running turn's, which
+    /// the chat shows as they stream.
+    private var newer = 0
 
-    /// Where the next older page starts: the display rows held, counted from the newest.
-    var nextOffset: Int { rows.count }
+    /// Where the next older page starts: the display rows held and the newer ones, counted
+    /// from the newest.
+    var nextOffset: Int { rows.count + newer }
 
-    /// Takes the newest page (offset 0). A short one is the whole session. A full one replaces
-    /// the rows held from the first row they share, which also drops rows the host stopped
-    /// showing there, and keeps the older ones; sharing none, it leaves a gap, so the history
-    /// starts again from it.
-    mutating func mergeNewest(_ page: [BotJSON]) {
-        let fresh = page.filter { Self.id($0) != nil }
-        let freshIDs = Set(fresh.compactMap(Self.id))
-        if page.count >= HermesREST.transcriptPageSize,
-           let shared = rows.firstIndex(where: { Self.id($0).map(freshIDs.contains) == true }) {
-            replace(with: rows[..<shared].filter { Self.id($0).map(freshIDs.contains) == false } + fresh)
-        } else {
-            replace(with: fresh)
-            hasOlder = page.count >= HermesREST.transcriptPageSize
-        }
+    /// Whether newest rows read back from offset 0 reach the rows held, so they leave no hole:
+    /// they share a row, or none is held.
+    func reaches(_ rows: [BotJSON]) -> Bool {
+        ids.isEmpty || rows.contains { Self.id($0).map(ids.contains) == true }
     }
 
-    /// Puts the page read at `nextOffset` in front, without the rows already held. Returns
-    /// whether it added any. A short page reached the first row; a full one that added
-    /// nothing ends paging too, so the same page is never asked for again.
+    func holds(_ id: Int) -> Bool { ids.contains(id) }
+
+    /// Takes the newest rows: pages read back from offset 0 until they reached the rows held,
+    /// oldest first. They replace the rows held from the first row they share, which also drops
+    /// rows the host stopped showing there, and keep the older ones. When they reached the first
+    /// row, or share none, the history starts again from them.
+    mutating func mergeNewest(_ fresh: [BotJSON], reachedStart: Bool) {
+        var seen = Set<Int>()
+        let fresh = fresh.filter { Self.id($0).map { seen.insert($0).inserted } == true }
+        if !reachedStart, let shared = rows.firstIndex(where: { Self.id($0).map(seen.contains) == true }) {
+            replace(with: rows[..<shared].filter { Self.id($0).map(seen.contains) == false } + fresh)
+        } else {
+            replace(with: fresh)
+            hasOlder = !reachedStart
+        }
+        newer = 0
+    }
+
+    /// Counts the rows read back from offset 0 after the newest one held, without taking them.
+    /// Returns false when they hold none, so the count is unknown.
+    mutating func countNewer(in fresh: [BotJSON]) -> Bool {
+        var seen = Set<Int>()
+        let fresh = fresh.filter { Self.id($0).map { seen.insert($0).inserted } == true }
+        guard let last = fresh.lastIndex(where: { Self.id($0).map(ids.contains) == true }) else { return false }
+        newer = fresh.count - 1 - last
+        return true
+    }
+
+    /// Puts the page read at `nextOffset` in front: its rows before the first row already held,
+    /// since a page is oldest first and rows saved meanwhile push held rows into it. Returns
+    /// whether it added any. A short page reached the first row; a full one that added nothing
+    /// ends paging too, so the same page is never asked for again.
     @discardableResult
     mutating func prependOlder(_ page: [BotJSON]) -> Bool {
         var seen = ids
-        let older = page.filter { row in Self.id(row).map { seen.insert($0).inserted } == true }
+        let older = page.prefix { Self.id($0).map(ids.contains) != true }
+            .filter { row in Self.id(row).map { seen.insert($0).inserted } == true }
         replace(with: older + rows)
         hasOlder = page.count >= HermesREST.transcriptPageSize && !older.isEmpty
         return !older.isEmpty
@@ -71,6 +96,8 @@ struct HermesCompaction: Equatable {
 /// `failed_turn`, shows its text by role. The host's `display_content`, `display_commentary` and
 /// `display_reasoning` already project the `codex_*` columns, which are never read. User rows that
 /// open with `[System:` are the gateway's notices and stay hidden, as `session.resume` hides them.
+/// A skill turn's stored row is the expanded skill; it shows as the line the user typed, which
+/// `session.resume` projects and a REST page does not (`skillInvocation`).
 enum HermesTranscriptProjection {
     struct Result: Equatable {
         var messages: [ChatMessage] = []
@@ -140,12 +167,13 @@ enum HermesTranscriptProjection {
                 // A steer is stored inside the out-of-band marker; unwrapped first, the trailing
                 // mention note is still a suffix and is hidden as on any other user row.
                 let steer = role == "user" ? ChatMessage.strippedSteerText(from: text) : nil
+                let skill = role == "user" ? skillInvocation(text) : nil
                 result.messages.append(ChatMessage(
                     role: isDelegationCompletion ? "delegation_completion" : role,
-                    content: role == "user" && !isDelegationCompletion ? BotMentions.displayText(steer ?? text) : text,
+                    content: skill ?? (role == "user" && !isDelegationCompletion ? BotMentions.displayText(steer ?? text) : text),
                     timestamp: row["timestamp"].number,
                     messageId: id,
-                    displayKind: steer != nil ? ChatMessage.steerDisplayKind : kind,
+                    displayKind: steer != nil ? ChatMessage.steerDisplayKind : kind ?? (skill == nil ? nil : "skill_invocation"),
                     displayMetadata: row["display_metadata"].argumentDictionary,
                     rowID: rowID
                 ))
@@ -174,6 +202,37 @@ enum HermesTranscriptProjection {
         guard !commentary.isEmpty, joined.trimmingCharacters(in: .whitespacesAndNewlines)
             != body.trimmingCharacters(in: .whitespacesAndNewlines) else { return body }
         return ([joined] + (body.isEmpty ? [] : [body])).joined(separator: "\n\n")
+    }
+
+    /// The line a skill turn's user typed, from the expanded skill the host stored: `/name` and
+    /// any instruction, or a stacked bundle's `/a /b` and its instruction. Nil for any other
+    /// text. A port of `describe_skill_invocation` (`agent/skill_commands.py`) at the pin, whose
+    /// markers are the host's builders' own.
+    static func skillInvocation(_ text: String) -> String? {
+        guard let head = text.range(of: "[IMPORTANT: The user has invoked the ", options: .anchored) else { return nil }
+        let quoted = text[head.upperBound...]
+        var name = ""
+        if quoted.first == "\"", let close = quoted.dropFirst().firstIndex(of: "\"") {
+            name = quoted[quoted.index(after: quoted.startIndex)..<close].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // The text between a marker and the next stop marker.
+        func cut(after marker: String, before stop: String, last: Bool = false) -> Substring {
+            guard let start = text.range(of: marker, options: last ? .backwards : [])?.upperBound else { return "" }
+            let tail = text[start...]
+            return tail[..<(tail.range(of: stop)?.lowerBound ?? tail.endIndex)]
+        }
+        // A bundle's instruction comes before its skills. A single skill's follows the skill's
+        // body, which may quote the marker, so the last one is the user's.
+        let instruction = text.contains(" skill bundle,")
+            ? cut(after: "\nUser instruction: ", before: "\n\n[Loaded as part of the ")
+            : text.contains("The full skill content is loaded below.]")
+            ? cut(after: "The user has provided the following instruction alongside the skill invocation: ",
+                  before: "\n\n[Runtime note:", last: true)
+            : ""
+        let words = instruction.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let label = name.hasPrefix("/") ? name : "/\(name)"
+        if !words.isEmpty { return name.isEmpty ? words : "\(label) \(words)" }
+        return name.isEmpty ? nil : label
     }
 
     /// A declared call's name: its labels' text (a bridge call such as `tool_call` names the

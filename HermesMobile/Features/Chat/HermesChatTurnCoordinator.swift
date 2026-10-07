@@ -69,14 +69,14 @@ struct HermesChatTranscript: Equatable {
 /// ordered frames onto the chat's `ChatStreamCoordinatorDelegate`, so message building,
 /// pacing and run endings are the webui path's. Text is delta-driven. Settled history comes
 /// from REST transcript pages (#1047), 100 rows at a time, newest first: an attach's rebuild
-/// signal (a gap, a reset replay, a new runtime) re-reads the newest page and lays the
-/// snapshot's in-flight turn after it, and a turn the host saved in full re-reads it so its
-/// rows take their durable ids. The engine drops repeated frames by `seq`, so appends never
-/// deduplicate by text. Each prompt, steer, redirect and stop is one `write`, never resent; a
-/// Send or Queue uploads its staged files first (#1012). The host's requests (approvals,
-/// questions, sudo and secret prompts) are `requests` (#1011); the goal, `/btw` and
-/// `/background` are `sideTasks` (#1013); its model and Profile chips are `settings` (#1015);
-/// its host's slash commands are `slashCommands` (#1036).
+/// signal (a gap, a reset replay, a new runtime) re-reads the newest rows, back to the rows
+/// held, and lays the snapshot's in-flight turn after them, and a turn the host saved in full
+/// re-reads them so its rows take their durable ids. The engine drops repeated frames by
+/// `seq`, so appends never deduplicate by text. Each prompt, steer, redirect and stop is one
+/// `write`, never resent; a Send or Queue uploads its staged files first (#1012). The host's
+/// requests (approvals, questions, sudo and secret prompts) are `requests` (#1011); the goal,
+/// `/btw` and `/background` are `sideTasks` (#1013); its model and Profile chips are
+/// `settings` (#1015); its host's slash commands are `slashCommands` (#1036).
 ///
 /// A turn's identity is the stored key and the host's `turn_started_at`, in place of a
 /// webui stream id. A turn starts at `message.start`, an accepted send or a running
@@ -138,8 +138,11 @@ struct HermesChatTranscript: Equatable {
     @ObservationIgnored private var refusedSignIn = false
     /// The settled history read so far (#1047).
     @ObservationIgnored private var history = HermesTranscriptHistory()
-    /// Why the last newest-page read failed, until one succeeds.
+    /// Why the last newest read failed, until one succeeds.
     @ObservationIgnored private var historyFailure: Error?
+    /// `turnsStarted` when the history last took the newest rows: a turn since then saved rows
+    /// it does not hold, which shift every older page.
+    @ObservationIgnored private var historyTurns = 0
     /// The running turn's rows as `message.complete`'s `persisted_turn` names them, when the
     /// host saved all of them.
     @ObservationIgnored private var savedTurn: SavedTurn?
@@ -606,7 +609,7 @@ struct HermesChatTranscript: Equatable {
             delegate?.streamCoordinatorDidReceiveErrorMessage(message)
         }
         if let usage = Self.contextWindow(payload["usage"]) { delegate?.hermesApplyUsage(usage) }
-        // Only a receipt for the whole turn retires its streamed rows (`persisted_turn`, 0.21.4).
+        // Only a receipt for the whole turn retires its streamed rows (`persisted_turn`, 0.21.5).
         let receipt = payload["persisted_turn"]
         if receipt["complete"].flag == true, let reply = receipt["final_assistant_row_id"].integer {
             savedTurn = SavedTurn(promptRowID: receipt["user_row_id"].integer, replyRowID: reply)
@@ -689,11 +692,36 @@ struct HermesChatTranscript: Equatable {
         return rows ?? []
     }
 
-    /// Merges the newest page into the history. A failure keeps the rows held, and the chat
-    /// shows it once connected; a read the attach outlived reports nothing.
-    private func readNewestPage(attempt: Int) async {
+    /// The newest rows, oldest first: pages read back from the newest until one reaches the
+    /// rows held, so a turn of more than a page leaves no hole between them, or reaches the first
+    /// row (`reachedStart`), at most `newestPageLimit` of them.
+    private func newestRows(attempt: Int) async throws -> (rows: [BotJSON], reachedStart: Bool) {
+        var rows: [BotJSON] = []
+        for _ in 0..<Self.newestPageLimit {
+            let page = try await self.page(at: rows.count, attempt: attempt)
+            rows = page + rows
+            if page.count < HermesREST.transcriptPageSize { return (rows, true) }
+            if history.reaches(page) { break }
+        }
+        return (rows, false)
+    }
+
+    /// How many pages a newest read goes back for the rows held; past it, the history starts
+    /// again from the newest rows.
+    private static let newestPageLimit = 5
+
+    /// Neither a turn nor a send is under way, so the transcript can take the newest rows.
+    private var isIdle: Bool { activeStreamID == nil && submitsInFlight == 0 }
+
+    /// Takes the newest rows into the history, which now holds every row the host saved for the
+    /// turns `turns` counts. A failure keeps the rows held, and the chat shows it once
+    /// connected; a read the attach outlived reports nothing.
+    private func readNewestRows(attempt: Int) async {
+        let turns = turnsStarted
         do {
-            history.mergeNewest(try await page(at: 0, attempt: attempt))
+            let fresh = try await newestRows(attempt: attempt)
+            history.mergeNewest(fresh.rows, reachedStart: fresh.reachedStart)
+            historyTurns = turns
             historyFailure = nil
         } catch {
             guard attempt == engine.generation, !Task.isCancelled else { return }
@@ -702,52 +730,68 @@ struct HermesChatTranscript: Equatable {
     }
 
     /// The rows the host saved for a turn take their durable ids and full tool output: the
-    /// newest page is read again and replaces the transcript in place. It applies only if the
-    /// chat is still idle on the same attach, nothing is going out, and the page holds the
-    /// turn's rows; otherwise the next turn's re-read brings them.
+    /// newest rows are read again and replace the transcript in place. It applies only if the
+    /// chat is still idle on the same attach, nothing is going out, and the rows read hold the
+    /// turn's; otherwise the next newest read brings them.
     private func refreshHistory(after turn: SavedTurn) {
         let attempt = engine.generation, turns = turnsStarted
         historyRefresh?.cancel()
         historyRefresh = Task { [weak self] in
-            guard let page = try? await self?.page(at: 0, attempt: attempt), let self else { return }
-            let ids = Set(page.compactMap(HermesTranscriptHistory.id))
-            guard attempt == self.engine.generation, turns == self.turnsStarted, self.activeStreamID == nil,
-                  self.submitsInFlight == 0, ids.contains(turn.replyRowID), turn.promptRowID.map(ids.contains) != false
-            else { return }
-            self.history.mergeNewest(page)
+            guard let fresh = try? await self?.newestRows(attempt: attempt), let self,
+                  attempt == self.engine.generation, turns == self.turnsStarted, self.isIdle else { return }
+            var merged = self.history
+            merged.mergeNewest(fresh.rows, reachedStart: fresh.reachedStart)
+            guard merged.holds(turn.replyRowID), turn.promptRowID.map(merged.holds) != false else { return }
+            self.history = merged
+            self.historyTurns = turns
             self.historyFailure = nil
             self.delegate?.hermesReplaceTranscript(self.historyTranscript())
         }
     }
 
     /// Puts the page before the oldest row held in front (#1047), and says whether it added
-    /// rows. A failed read says why in the chat; one that lands after the history moved, or
-    /// after the attach changed, is dropped.
+    /// rows. A turn since the newest rows were taken shifted every older page by the rows it
+    /// saved, so the newest rows are read first: taken while idle, so the turn's rows take
+    /// their ids, or only counted while a turn runs, whose rows show as they stream. A failed
+    /// read says why in the chat; one that lands after the history moved, or after the attach
+    /// changed, is dropped.
     func loadOlderHistory() async -> Bool {
         guard history.hasOlder, engine.connectionState == .connected else { return false }
-        let attempt = engine.generation, offset = history.nextOffset
-        let page: [BotJSON]
+        let attempt = engine.generation, turns = turnsStarted
         do {
-            page = try await self.page(at: offset, attempt: attempt)
+            if historyTurns != turns || !isIdle {
+                let fresh = try await newestRows(attempt: attempt)
+                if turns == turnsStarted, isIdle {
+                    history.mergeNewest(fresh.rows, reachedStart: fresh.reachedStart)
+                    historyTurns = turns
+                    historyFailure = nil
+                    delegate?.hermesReplaceTranscript(historyTranscript())
+                    guard history.hasOlder else { return false }
+                } else if !history.countNewer(in: fresh.rows) {
+                    return false
+                }
+            }
+            let offset = history.nextOffset
+            let page = try await self.page(at: offset, attempt: attempt)
+            guard offset == history.nextOffset else { return false }
+            let added = history.prependOlder(page)
+            delegate?.hermesPrependHistory(historyTranscript())
+            return added
         } catch {
             if attempt == engine.generation, !Task.isCancelled {
                 delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: error, address: engine.connection.address))
             }
             return false
         }
-        guard offset == history.nextOffset else { return false }
-        let added = history.prependOlder(page)
-        delegate?.hermesPrependHistory(historyTranscript())
-        return added
     }
 
-    /// After a failed history read, the chat's retry reads the newest page again and lays the
+    /// After a failed history read, the chat's retry reads the newest rows again and lays the
     /// history out anew. Only while idle, so no running turn's rows are replaced.
     func retryHistoryIfFailed() async {
         guard historyFailure != nil, engine.connectionState == .connected, activeStreamID == nil else { return }
         let attempt = engine.generation
-        await readNewestPage(attempt: attempt)
-        guard attempt == engine.generation, activeStreamID == nil, submitsInFlight == 0 else { return }
+        await readNewestRows(attempt: attempt)
+        guard attempt == engine.generation, isIdle else { return }
         if let historyFailure {
             delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: historyFailure, address: engine.connection.address))
         } else {
@@ -755,10 +799,10 @@ struct HermesChatTranscript: Equatable {
         }
     }
 
-    /// A newest-page read failed and none has succeeded since.
+    /// A newest read failed and none has succeeded since.
     var hasHistoryFailure: Bool { historyFailure != nil }
 
-    /// Reattaches so the next attach re-reads the newest page and rebuilds the transcript:
+    /// Reattaches so the next attach re-reads the newest rows and rebuilds the transcript:
     /// frames were lost mid-turn.
     private func rebuildAfterGap() {
         needsRebuild = true
@@ -996,10 +1040,10 @@ extension HermesChatTurnCoordinator: HermesConversationOwner {
     /// The settled history comes from REST pages (#1047), so the snapshot is live state only.
     var readsSnapshotHistory: Bool { false }
 
-    /// A rebuild reads the newest history page first, while the engine still holds the frames.
+    /// A rebuild reads the newest history rows first, while the engine still holds the frames.
     func conversationDidReadSnapshot(_ snapshot: BotJSON, runtime: String, attempt: Int) async throws {
         guard engine.isCurrent(snapshot) else { throw BotFailure.unsupported }
-        if engine.replayWasReset || needsRebuild { await readNewestPage(attempt: attempt) }
+        if engine.replayWasReset || needsRebuild { await readNewestRows(attempt: attempt) }
         try engine.check(attempt)
         reconcile(with: snapshot)
     }

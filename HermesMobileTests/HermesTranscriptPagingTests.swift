@@ -130,6 +130,25 @@ import Observation
         XCTAssertEqual(chat.model.completedReasoningGroups.map(\.text), ["Projected thought."])
     }
 
+    /// A skill turn's row holds the expanded skill; it shows as the line the user typed, as
+    /// `session.resume` shows it (#1036): a skill with its instruction, a bare skill, a stacked
+    /// bundle.
+    func testASkillTurnShowsTheTypedLine() async {
+        let skill = "[IMPORTANT: The user has invoked the \"demo-skill\" skill, indicating they want you to follow its "
+            + "instructions. The full skill content is loaded below.]\n\n---\nname: demo-skill\n---\nSay hello.\n\n"
+            + "[Skill directory: <skills>/demo-skill]"
+        let instructed = skill + "\n\nThe user has provided the following instruction alongside the skill invocation: "
+            + "do it\n\n[Runtime note: Reply briefly.]"
+        let bundle = "[IMPORTANT: The user has invoked the \"/clean /work\" stacked skill bundle, loading 2 skills "
+            + "together. Treat every skill below as active guidance for this turn.]\n\nSkills loaded: clean, work\n\n"
+            + "User instruction: tidy the logs\n\n[Loaded as part of the stacked skill invocation \"clean\".]\n\nClean up."
+        let chat = await openChat(pages: [0: [
+            row(1, "user", instructed), row(2, "assistant", "Hello."), row(3, "user", skill), row(4, "user", bundle)
+        ]])
+        XCTAssertEqual(chat.model.messages.map(\.content), ["/demo-skill do it", "Hello.", "/demo-skill", "/clean /work tidy the logs"])
+        XCTAssertEqual(chat.model.messages.map(\.displayKind), ["skill_invocation", nil, "skill_invocation", "skill_invocation"])
+    }
+
     /// A compacted session shows its compacted turns, then the "Context compaction · Reference
     /// only" card with the summary, then the turns after it. Ids are not in display order: the
     /// compaction re-inserted the first turn under a new id.
@@ -180,21 +199,79 @@ import Observation
         XCTAssertEqual(chat.writes("prompt.submit").count, 1)
     }
 
-    /// The chat's own rows, such as a goal's notice, are no host row: they stay, after the
-    /// saved history (#1013).
-    func testTheChatsOwnRowsStayAfterTheSavedHistory() async {
+    /// The chat's own rows, such as a goal's notice, are no host row: when the turn after one
+    /// takes its saved rows, the notice stays where it was, above them (#1013).
+    func testTheChatsOwnRowsKeepTheirPlace() async {
         let chat = await openChat(pages: [0: [row(1, "user", "Earlier"), row(2, "assistant", "Earlier answer.")]])
+        chat.host.always("prompt.submit", .init(result: .object(["status": .string("streaming")])))
         _ = chat.model.appendLocalNoticeMessage("Goal: ship the release")
+        _ = await chat.model.sendMessage("Run it")
         chat.receive(event(1, "message.start"))
         chat.receive(event(2, "message.complete", ["status": .string("complete"), "text": .string("Done."),
                                                    "persisted_turn": .object([
-                                                       "row_ids": .array([.number(3)]), "complete": .bool(true),
-                                                       "final_assistant_row_id": .number(3)
+                                                       "row_ids": .array([.number(3), .number(4)]), "complete": .bool(true),
+                                                       "user_row_id": .number(3), "final_assistant_row_id": .number(4)
                                                    ])]))
-        chat.pages.set(0, [row(1, "user", "Earlier"), row(2, "assistant", "Earlier answer."), row(3, "assistant", "Done.")])
+        let positions = chat.model.displayedTranscriptMessages.map(\.renderID)
+        chat.pages.set(0, [row(1, "user", "Earlier"), row(2, "assistant", "Earlier answer."),
+                           row(3, "user", "Run it"), row(4, "assistant", "Done.")])
         chat.receive(event(3, "session.info", ["running": .bool(false)]))
-        await waitUntil("saved rows") { chat.model.messages.contains { $0.rowID == 3 } }
-        XCTAssertEqual(chat.model.messages.map(\.content), ["Earlier", "Earlier answer.", "Done.", "Goal: ship the release"])
+        await waitUntil("saved rows") { chat.model.messages.contains { $0.rowID == 4 } }
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Earlier", "Earlier answer.", "Goal: ship the release", "Run it", "Done."])
+        XCTAssertEqual(chat.model.displayedTranscriptMessages.map(\.renderID), positions, "no row moves")
+    }
+
+    /// A turn whose rows the chat never re-read (a host before 0.21.5's `persisted_turn`, or a
+    /// stopped turn) shifts every older page by the rows the host saved, here a whole page. Load
+    /// earlier first reads the newest rows back to the rows held, so the turn takes its saved
+    /// rows, then the page before them; each row shows once, and the rows on screen and the
+    /// chat's own rows keep their place.
+    func testLoadingEarlierAfterAnUnreadTurnReadsTheNewestRowsFirst() async {
+        let chat = await openChat(pages: [0: (101...200).map(alternating)])
+        _ = chat.model.appendLocalNoticeMessage("Goal: ship the release")
+        chat.receive(event(1, "message.start"))
+        chat.receive(event(2, "message.complete", ["status": .string("complete"), "text": .string("Done.")]))
+        chat.receive(event(3, "session.info", ["running": .bool(false)]))
+        chat.pages.set(0, (201...300).map(alternating))
+        chat.pages.set(100, (101...200).map(alternating))
+        chat.pages.set(200, (1...100).map(alternating))
+        chat.pages.set(300, [])
+        let shown = renderID(of: "tip/row-101", in: chat.model)
+
+        let first = await chat.model.loadOlderMessages()
+        XCTAssertTrue(first)
+        XCTAssertTrue(chat.model.hasOlderMessages, "a full page")
+        XCTAssertEqual(chat.pages.offsets, [0, 0, 100, 200], "the newest rows back to the rows held, then the page before them")
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), Array(1...300))
+        XCTAssertEqual(chat.model.messages.count, 301, "each saved row once and the notice, without the streamed reply")
+        XCTAssertEqual(renderID(of: "tip/row-101", in: chat.model), shown, "the rows on screen keep their place")
+        let notice = chat.model.messages.firstIndex { $0.content == "Goal: ship the release" }
+        XCTAssertEqual(notice.map { chat.model.messages[$0 - 1].rowID }, 200, "the notice stays after the row it followed")
+
+        let done = await chat.model.loadOlderMessages()
+        XCTAssertFalse(done)
+        XCTAssertFalse(chat.model.hasOlderMessages, "an empty page is the first row")
+        XCTAssertEqual(chat.pages.offsets, [0, 0, 100, 200, 300])
+    }
+
+    /// While a turn runs, the rows it saved shift every older page, here by more than a page.
+    /// Load earlier counts them in the newest rows, back to the rows held, without showing them
+    /// twice, and reads the page before the rows held.
+    func testLoadingEarlierMidTurnSkipsTheRunningTurnsRows() async {
+        let chat = await openChat(pages: [0: (101...200).map(alternating)])
+        chat.receive(event(1, "message.start"))
+        chat.receive(event(2, "message.delta", ["text": .string("Working")]))
+        // Rows 201 to 350 are the running turn's.
+        chat.pages.set(0, (251...350).map(alternating))
+        chat.pages.set(100, (151...250).map(alternating))
+        chat.pages.set(250, (1...100).map(alternating))
+
+        let loaded = await chat.model.loadOlderMessages()
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(chat.pages.offsets, [0, 0, 100, 250])
+        chat.model.flushPendingStreamingContent()
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), Array(1...200))
+        XCTAssertEqual(chat.model.messages.last?.content, "Working", "the running turn shows as it streams")
     }
 
     /// A hole in the live stream reattaches and re-reads the newest page; the running turn's
@@ -217,6 +294,28 @@ import Observation
         chat.receive(event(7, "message.delta", ["text": .string(" and more")]))
         chat.model.flushPendingStreamingContent()
         XCTAssertEqual(chat.model.messages.last?.content, "Partial reply and more")
+    }
+
+    /// A hole in a turn that saved more than a page: the reattach reads the newest rows back to
+    /// the rows held, so they stay, and the turn's saved prompt shows once, before its tool rows.
+    func testAGapAfterMoreThanAPageKeepsTheRowsHeld() async {
+        let chat = await openChat(pages: [0: [row(1, "user", "Hi"), row(2, "assistant", "Hello.")]])
+        chat.receive(event(1, "message.start"))
+        chat.receive(event(2, "message.delta", ["text": .string("Part")]))
+        let tools = (4...123).map { row($0, "tool", "output \($0)") }
+        chat.pages.set(0, Array(tools.suffix(100)))
+        chat.pages.set(100, [row(1, "user", "Hi"), row(2, "assistant", "Hello."), row(3, "user", "Next")] + tools.prefix(20))
+        let snapshot = resume(running: true, inflight: ["user": .string("Next"), "assistant": .string("Partial reply")])
+        chat.host.next("session.events.since", .init(result: BotFixtureWire.replay(latest: 6)))
+        chat.host.next("session.resume", .init(result: snapshot))
+        chat.host.next("session.resume", .init(result: snapshot))
+        chat.receive(event(5, "message.delta", ["text": .string("lost the middle")]))
+        await waitUntil("rebuilt") { chat.turn.engine.connectionState == .connected }
+        chat.model.flushPendingStreamingContent()
+        XCTAssertEqual(chat.pages.offsets, [0, 0, 100])
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello.", "Next", "Partial reply"])
+        XCTAssertEqual(chat.model.completedToolCallGroups.flatMap(\.toolCalls).map(\.id), (4...123).map { "tip/row-\($0)" })
+        XCTAssertFalse(chat.model.hasOlderMessages)
     }
 
     /// A page that fails keeps what the chat shows and says why; the chat's retry reads it again.

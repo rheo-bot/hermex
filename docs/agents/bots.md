@@ -303,20 +303,28 @@ only when the deltas never carried it. Settled history comes from REST transcrip
 where `offset` counts display rows back from the newest and each page is oldest first. Both
 `session.resume` calls omit messages. `HermesTranscriptHistory` joins pages by position
 (row ids are not in display order: a compaction re-inserts the first turn under new ids) and
-drops repeats by id, since rows added meanwhile shift offsets; a short page is the first row.
-`HermesTranscriptProjection` makes each row `<key>/row-<id>` with `rowID = id`: tool rows join
-their call by `tool_call_id` with the full output, `hidden` rows and `[System:` notices never
-show, `codex_*` columns are never read, and the latest `_compressed_summary` row places the
-"Context compaction · Reference only" card after the compacted turns. On the rebuild signal
-(a gap, a backwards `seq`, a reset replay, a new runtime) the reattach re-reads the newest page
-before the frames held meanwhile go out, lays the snapshot's in-flight prompt and reply after
-it, and drops the held deltas that reply already holds after the replayed text (the host
-appends each delta there before emitting it); a continuous reattach applies the replayed
-frames instead, so a return from the background repeats nothing. A `message.complete` whose
-`persisted_turn` is `complete` re-reads the newest page once the turn ends, so its rows take
-their ids in place (positional render ids from a high base keep every row where it was; an
+drops repeats by id; a short page is the first row. Rows the host saved since the newest
+rows were taken shift every older page, so an older page adds only its rows before the first
+row already held, and every newest read goes back page by page until it reaches the rows held
+(at most five pages), so a turn of more than a page leaves no hole. Load earlier after a turn
+the history has not taken (no `persisted_turn` receipt, or a turn still running) reads the
+newest rows first: idle, the transcript takes them; mid-turn, they are only counted, and the
+older page's offset skips them. `HermesTranscriptProjection` makes each row `<key>/row-<id>`
+with `rowID = id`: tool rows join their call by `tool_call_id` with the full output, `hidden`
+rows and `[System:` notices never show, `codex_*` columns are never read, a skill turn's
+expanded skill shows as the typed `/skill` line (a port of the host's
+`describe_skill_invocation`, which `session.resume` applies and a REST page does not), and the
+latest `_compressed_summary` row places the "Context compaction · Reference only" card after
+the compacted turns. On the rebuild signal (a gap, a backwards `seq`, a reset replay, a new
+runtime) the reattach re-reads the newest rows before the frames held meanwhile go out, lays
+the snapshot's in-flight prompt and reply after them, and drops the held deltas that reply
+already holds after the replayed text (the host appends each delta there before emitting
+it); a continuous reattach applies the replayed frames instead, so a return from the
+background repeats nothing. A `message.complete` whose `persisted_turn` (0.21.5) is
+`complete` re-reads the newest rows once the turn ends, so its rows take their ids in place (positional render ids from a high base keep every row where it was; an
 older page moves the base back), unless a send or another turn started meanwhile. Background
-cards and local slash output (a goal's notice) are the chat's own and stay, after the history.
+cards and local slash output (a goal's notice) are the chat's own: each stays after the row it
+followed, or last when that row was a streamed one.
 A failed read keeps what is shown and sets the chat's load error, whose retry reads again. The turn
 identity is the stored key and the host's `turn_started_at`; a turn starts at
 `message.start` (prompted or not), an accepted send or a running snapshot, and ends once
@@ -1646,9 +1654,10 @@ dispatching, because the cached one is a connect-time snapshot and a command add
 to the host since then would shadow the skill; the read also refreshes the panel.
 The last microseconds of that race cannot be closed from the phone — the gateway
 has no skill-only dispatch. Expansion happens before any durable marker, so a
-failure cannot strand a submission. The transcript still shows the typed line,
-because the host projects the invocation back over the stored message
-(`display_kind: "skill_invocation"`).
+failure cannot strand a submission. The transcript still shows the typed line:
+`session.resume` projects the invocation back over the stored message
+(`display_kind: "skill_invocation"`), and a Hermes chat's REST pages, which do not, get the
+same projection from `HermesTranscriptProjection.skillInvocation`.
 
 `BotClient` allowlists `commands.catalog` (exactly `session_id`) and `command.dispatch`
 (exactly `name`, `arg`, `session_id`; a bare name with no slash or whitespace) as
