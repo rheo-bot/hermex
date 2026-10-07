@@ -5309,14 +5309,16 @@ final class ChatViewModel {
     }
 
     /// `/clear` in a Hermes session: a new chat in this one's place, in its Profile, on the
-    /// model its chip shows and in its working folder. The old chat stays as it is, in the list
-    /// and with its draft, so nothing asks first.
+    /// model its chip shows (the one the host reported while the chip's catalog is unread or
+    /// failed) and in its working folder. The old chat stays as it is, in the list and with
+    /// its draft, so nothing asks first.
     private func clearedHermesChat(_ hermes: HermesChatTurnCoordinator) -> HermesSessionChat {
-        let model = hermes.settings.selectedModel.flatMap { option in
+        let chosen = hermes.settings.selectedModel.flatMap { option in
             option.providerID.map { HermesCall.Model(id: option.id, provider: $0) }
         }
         return HermesSessionChat(server: hermes.engine.server, connection: hermes.engine.connection,
-                                 target: .new(profile: hermes.settings.profile, cwd: hermes.cwd, model: model))
+                                 target: .new(profile: hermes.settings.profile, cwd: hermes.cwd,
+                                              model: chosen ?? hermes.reportedModel))
     }
 
     // MARK: Hermes history rewinds (#1049)

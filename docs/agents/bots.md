@@ -379,7 +379,10 @@ under new ids, and posts one note built like webui's: "Context compressed." with
 `headline` and `token_line` and the focus. `compressed` with `removed: 0` (nothing to gain, or a
 summary that would grow the transcript), `aborted`, `pending` (the compute host is still at it)
 and `{compressed: false, lock_held: true}` show the host's `message`, else the summary's `note`
-or `headline`, on the status line and keep the draft. A lost or unreadable answer, such as
+or `headline`, on the status line and keep the draft. After `pending`, the compute host's late
+answer, `status.update {kind: "compacted"}` (the kind an in-process compaction also emits),
+re-reads the history from the newest page; until it comes, a rebuilding attach starts the
+history again too. A lost or unreadable answer, such as
 one backgrounding drops while the model writes the summary, is never resent (#508): the next
 attach, at once or when the chat returns, reads the history from the newest page and rebuilds.
 On a host set to legacy rotation
@@ -388,7 +391,8 @@ stored key, which `session.info` (and the compress reply's `info`) reports as
 `stored_session_id`: `HermesConversation.adoptStoredKey` takes it while connected, so later
 pages, uploads and titles follow it, while `root`, the draft key and the list row keep the
 original. `/clear` deletes nothing: it opens a new chat in this one's place,
-`ConversationTarget.new(profile:cwd:model:)` with the chip's model and the last reported `cwd`,
+`ConversationTarget.new(profile:cwd:model:)` with the chip's model (the `model` and `provider`
+`session.info` reported while the chip's catalog is unread or failed) and the last reported `cwd`,
 whose first attach is `session.create {profile, cwd, model, provider}`; reasoning, personality
 and yolo start at the new chat's defaults, and the old chat stays in the list with its history
 and draft, so nothing asks first. Checked against `scripts/local-hermes` at the pin: a running

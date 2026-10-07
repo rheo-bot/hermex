@@ -125,6 +125,24 @@ import Observation
         XCTAssertEqual(chat.writes("session.compress").count, 1)
     }
 
+    /// A compute host that answers `pending` finishes later and says so with
+    /// `status.update {kind: "compacted"}`: then the chat reads the compacted history.
+    func testAPendingCompactionIsReadWhenTheHostFinishes() async {
+        let chat = await openChat(threeTurns)
+        chat.host.next("session.compress", .init(result: .object([
+            "status": .string("pending"), "turn_isolation": .bool(true),
+            "message": .string("compression still running in the background; the transcript will refresh when it finishes")
+        ])))
+        let result = await chat.model.runHermesSlashCommand("/compress")
+        XCTAssertEqual(result, .notDelivered)
+        chat.pages["tip"] = compactedTurns
+
+        chat.receive(event(1, "status.update", ["kind": .string("compacted"), "text": .string("✓ Context compression complete")]))
+
+        await waitUntil("the compacted history") { chat.model.messages.compactMap(\.rowID) == [7, 8, 3, 4, 10, 11] }
+        XCTAssertEqual(chat.model.compressionReferenceCard?.referenceText, "The user asked for two answers.")
+    }
+
     // MARK: Stored key rotation
 
     /// A host on legacy compaction re-points the session to a new stored key, which its
@@ -183,6 +201,20 @@ import Observation
         XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [1, 2, 3, 4, 5, 6])
         XCTAssertEqual(chat.writes("slash.exec"), [], "never the host's own /clear")
         XCTAssertEqual(chat.writes("session.create"), [])
+    }
+
+    /// Before the chip's catalog answers, or when it fails, `/clear` keeps the model and
+    /// provider the host reported for this chat instead of the Profile's default.
+    func testClearKeepsTheReportedModelWithoutTheCatalog() async {
+        let chat = await openChat(threeTurns, info: [
+            "cwd": .string("/work/app"), "model": .string("claude-opus"), "provider": .string("anthropic")
+        ])
+
+        let result = await chat.model.runHermesSlashCommand("/clear")
+
+        guard case .replacedHermesSession(let next)? = result else { return XCTFail("Expected a chat in this one's place") }
+        XCTAssertEqual(next.target, .new(profile: "default", cwd: "/work/app",
+                                         model: HermesCall.Model(id: "claude-opus", provider: "anthropic")))
     }
 
     /// The cleared chat's first attach creates its session once, with those settings.
