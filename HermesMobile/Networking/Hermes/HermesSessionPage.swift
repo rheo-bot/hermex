@@ -117,7 +117,8 @@ struct HermesSessionPages: Equatable {
     /// True for the Archived screen's pages.
     let archived: Bool
     private(set) var rows: [HermesSessionRow] = []
-    /// Where the next page starts.
+    /// Where the next page starts. A row that leaves moves the host's later rows up one, so it
+    /// moves back one too; for a back-filled pinned row that only re-reads a row.
     private(set) var nextOffset = 0
     /// False once a page shows the list's end.
     private(set) var hasMore = true
@@ -163,6 +164,7 @@ struct HermesSessionPages: Equatable {
     mutating func remove(_ id: String) {
         guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
         identities.remove(rows.remove(at: index).identity)
+        nextOffset = max(nextOffset - 1, 0)
     }
 
     /// Puts `row` back as it was, where it stood: in place of the row with its identity, else at
@@ -171,6 +173,7 @@ struct HermesSessionPages: Equatable {
         if let current = rows.firstIndex(where: { $0.identity == row.identity }) { rows[current] = row; return }
         rows.insert(row, at: min(index, rows.count))
         identities.insert(row.identity)
+        nextOffset += 1
     }
 }
 

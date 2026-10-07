@@ -114,6 +114,9 @@ final class ArchivedSessionsViewModel {
                 try await restoreHermes(session, key: sessionId)
                 return true
             } catch {
+                // `.stale`: this screen closed before the host's answer was read, so the restore
+                // may have landed. The row stays gone, and the screen's next load shows the host's.
+                if error as? BotFailure == .stale { return false }
                 restore(removedSession)
                 if !Self.isCancellationError(error) { actionErrorMessage = hermesFailure(error) }
                 return false
@@ -169,15 +172,17 @@ final class ArchivedSessionsViewModel {
         return HermesSessionChat(server: server, connection: hermes.connection, target: target)
     }
 
-    /// Reads the next page of archived sessions, one at a time.
+    /// Reads the next page of archived sessions, one at a time. A restore or delete that lands
+    /// meanwhile moves the host's rows, so that page is dropped and the next one reads again.
     func loadMore() async {
         guard hasMore, !isLoadingMore, let wire, let profile = hermesProfile else { return }
         let serial = readSerial
+        let offset = pages.nextOffset
         isLoadingMore = true
         defer { if serial == readSerial { isLoadingMore = false } }
         do {
-            let page = try await wire.sessionPage(profile: profile, offset: pages.nextOffset, archived: true)
-            guard serial == readSerial else { return }
+            let page = try await wire.sessionPage(profile: profile, offset: offset, archived: true)
+            guard serial == readSerial, pages.nextOffset == offset else { return }
             var pages = self.pages
             pages.append(page)
             show(pages, profile: profile)

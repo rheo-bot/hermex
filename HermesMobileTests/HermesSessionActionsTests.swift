@@ -168,6 +168,32 @@ import Observation
         XCTAssertNotNil(list.actionErrorMessage)
     }
 
+    /// An archive the host answers after the list's client closed (the app left mid-request) may
+    /// have landed, so the row stays gone with no alert and no Undo, rather than coming back as
+    /// refused.
+    func testAnArchiveAnsweredAfterTheListClosedIsNotRolledBack() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        let rows = [HermesSessionRow(id: "a", lastActive: 2, profile: "default"),
+                    HermesSessionRow(id: "b", lastActive: 1, profile: "default")]
+        serveList(rows, on: host) { $0.httpMethod == "PATCH" ? .park : nil }
+        let parked = expectation(description: "archive parked")
+        HermesHostFixture.onPark = { parked.fulfill() }
+        let list = makeList(connection)
+        await list.openHermes()
+        let row = try XCTUnwrap(list.sessions.first { $0.sessionId == "a" })
+
+        let archive = Task { await list.archive(row) }
+        await fulfillment(of: [parked], timeout: 5)
+        list.closeHermes()
+        HermesHostFixture.releaseParked(.json(200, .object(["ok": .bool(true), "title": .null, "archived": .bool(true)])))
+        let archived = await archive.value
+
+        XCTAssertFalse(archived, "no Undo for an answer the list never read")
+        XCTAssertEqual(list.sessions.map(\.sessionId), ["b"])
+        XCTAssertNil(list.actionErrorMessage)
+    }
+
     // MARK: Archived screen
 
     /// The Archived page keeps only archived rows: a hidden Bot Chat is listed under its bot's
@@ -209,6 +235,40 @@ import Observation
         XCTAssertTrue(restored)
         XCTAssertEqual(patches, [.object(["archived": .bool(false), "profile": .string("research")])])
         XCTAssertEqual(archive.sessions.map(\.sessionId), ["old"])
+    }
+
+    /// A restore moves the host's later archived rows up one, so Load more reads from where they
+    /// now start: the row just past the first page still appears.
+    func testLoadMoreAfterARestoreStillReachesTheRowPastTheFirstPage() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        var archived = (0...HermesREST.sessionPageSize).map { "s\($0)" }
+        _ = HermesHostFixture.configuration { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("GET", "/api/sessions"):
+                let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems ?? []
+                let offset = Int(query.first { $0.name == "offset" }?.value ?? "") ?? 0
+                let rows = archived.dropFirst(offset).prefix(HermesREST.sessionPageSize)
+                return .json(200, .object(["sessions": .array(rows.map { .object(["id": .string($0), "archived": .bool(true)]) })]))
+            case ("PATCH", let path?):
+                archived.removeAll { "/api/sessions/\($0)" == path }
+                return .json(200, .object(["ok": .bool(true), "title": .null, "archived": .bool(false)]))
+            default: return nil
+            }
+        }
+        let archive = ArchivedSessionsViewModel(server: server, hermes: HermesArchiveSource(
+            connection: record, profile: "default", makeWire: { _ in BotClient(http: connection) }, preferences: defaults
+        ))
+        await archive.load()
+        XCTAssertEqual(archive.sessions.count, 100)
+
+        let restored = await archive.unarchive(try XCTUnwrap(archive.sessions.first { $0.sessionId == "s5" }))
+        XCTAssertTrue(restored)
+        await archive.loadMore()
+
+        XCTAssertEqual(archive.sessions.count, 100)
+        XCTAssertEqual(archive.sessions.last?.sessionId, "s100")
+        XCTAssertFalse(archive.sessions.contains { $0.sessionId == "s5" })
     }
 
     // MARK: Export

@@ -2009,7 +2009,9 @@ final class SessionListViewModel {
 
     /// Pins, archives or restores a row: shows the change at once, writes it, and puts the row
     /// back if the host refuses. A list read already out predates the change, so it is dropped,
-    /// and the list reads again once the host has answered.
+    /// and the list reads again once the host has answered. When the list's client closed first
+    /// (`.stale`: the app left, or a screen was pushed), the write may have landed, so the row
+    /// stays as shown, unannounced, and the list's next read shows the host's.
     private func changeHermesSession(_ session: SessionSummary, _ change: HermesSessionChange,
                                      animation: Animation?) async -> Bool {
         guard let target = hermesTarget(session), beginSessionMutation(target.key) else { return false }
@@ -2025,13 +2027,14 @@ final class SessionListViewModel {
             requestHermesReload()
             return true
         } catch {
-            if let before {
+            let unknown = error as? BotFailure == .stale
+            if !unknown, let before {
                 var pages = hermesPages
                 pages.restore(before.row, at: before.index)
                 showHermesPages(pages, animation: animation)
             }
             requestHermesReload()
-            if !Task.isCancelled { showHermesActionFailure(error) }
+            if !unknown, !Task.isCancelled { showHermesActionFailure(error) }
             return false
         }
     }
@@ -2062,7 +2065,9 @@ final class SessionListViewModel {
     }
 
     /// Renames a row from the rename sheet. The host cleans the title, and its refusal (a title
-    /// in use, too long, or a Bot Chat's) stays in the sheet as `renameErrorMessage`.
+    /// in use, too long, or a Bot Chat's) stays in the sheet as `renameErrorMessage`. A rename
+    /// whose answer came after the list's client closed (`.stale`) may have landed, so the sheet
+    /// stays without a message.
     private func renameHermesSession(_ session: SessionSummary, to title: String) async -> Bool {
         guard let target = hermesTarget(session) else {
             // The sheet is up, so the reason goes there rather than to the list's alert.
@@ -2084,7 +2089,7 @@ final class SessionListViewModel {
             requestHermesReload()
             return true
         } catch {
-            if !Task.isCancelled { renameErrorMessage = hermesActionFailure(error) }
+            if !Task.isCancelled, error as? BotFailure != .stale { renameErrorMessage = hermesActionFailure(error) }
             return false
         }
     }
