@@ -1252,8 +1252,10 @@ pick and can name a deleted project, so it is never read.
   folders: [folder], primary_path: folder, color}`. The sheet's required folder field completes
   host paths from `/` or `~/` with `complete.path {word, profile}`, outside any session, building
   each suggestion from the item's `display`; from a row's Move menu it starts on that session's
-  `cwd`. A folder another project has as its primary is 5063, whose message names that project
-  and stays in the sheet.
+  `cwd`. The host lists at most 30 entries per folder, files included, in name order with the
+  hidden ones first, so `~/` in a busy home folder can list only hidden entries: the field then
+  asks for more of the name. A folder another project has as its primary is 5063, whose message
+  names that project and stays in the sheet.
 - **Rename and recolor** are `projects.update {profile, id, name, color?}`; **Delete** is
   `projects.delete {profile, id}`, a hard delete that leaves the sessions alone ("Sessions stay;
   only the project is removed."). An automatic project has no record, so it offers neither.

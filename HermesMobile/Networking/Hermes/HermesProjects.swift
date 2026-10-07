@@ -41,24 +41,38 @@ struct HermesProjectTree: Equatable {
 /// The host folders that complete a typed path in the Hermes create sheet's folder field
 /// (#1052), from `complete.path` outside any session.
 enum HermesFolderCompletion {
+    /// The most entries `complete.path` lists for one folder: files too, in name order with the
+    /// hidden ones first (`_dir_listing_items` at the pin).
+    static let hostListingLimit = 30
+
+    /// What the folder field offers for one typed path.
+    struct Suggestions: Equatable {
+        /// Each as the typed parent plus the folder's name and `/`, so the user can keep typing.
+        var folders: [String] = []
+        /// The host's listing stopped at its limit before it reached a folder to offer, as in a
+        /// home folder with many hidden entries. Typing more of the name narrows the listing.
+        var needsMoreTyping = false
+    }
+
     /// Whether `word` can be completed: a path from the host's root or home, so it never
     /// depends on which folder the host picks when no session names one.
     static func completes(_ word: String) -> Bool {
         (word.hasPrefix("/") || word.hasPrefix("~/")) && !word.contains(where: \.isNewline)
     }
 
-    /// The folders under the typed path's parent whose names start with its last part, each as
-    /// the typed parent plus the folder's name and `/`, so the user can keep typing into it.
-    /// Hidden folders show only once their leading `.` is typed.
-    static func folders(from reply: BotJSON, typed word: String) -> [String] {
-        guard let slash = word.lastIndex(of: "/") else { return [] }
+    /// The folders under the typed path's parent whose names start with its last part. Hidden
+    /// folders show only once their leading `.` is typed.
+    static func suggestions(from reply: BotJSON, typed word: String) -> Suggestions {
+        guard let slash = word.lastIndex(of: "/") else { return Suggestions() }
         let parent = word[...slash]
         let showsHidden = word[word.index(after: slash)...].hasPrefix(".")
-        return (reply["items"].list ?? []).compactMap { item in
+        let items = reply["items"].list ?? []
+        let folders: [String] = items.compactMap { item in
             guard item["meta"].text == "dir", var name = item["display"].text ?? item["text"].text else { return nil }
             while name.hasSuffix("/") { name.removeLast() }
             guard !name.isEmpty, !name.contains("/"), showsHidden || !name.hasPrefix(".") else { return nil }
             return parent + name + "/"
         }
+        return Suggestions(folders: folders, needsMoreTyping: folders.isEmpty && items.count >= hostListingLimit)
     }
 }

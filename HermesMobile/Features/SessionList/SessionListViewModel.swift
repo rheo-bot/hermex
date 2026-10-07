@@ -2169,10 +2169,10 @@ final class SessionListViewModel {
 
     /// The host's folders that complete `word` in the create sheet's folder field; none when it
     /// can't be completed or the host doesn't answer.
-    func completeHermesFolder(_ word: String) async -> [String] {
+    func completeHermesFolder(_ word: String) async -> HermesFolderCompletion.Suggestions {
         guard HermesFolderCompletion.completes(word), let wire = hermesWire, let profile = hermesProfile,
-              let reply = try? await wire.call(.completeFolder(word: word, profile: profile)) else { return [] }
-        return HermesFolderCompletion.folders(from: reply, typed: word)
+              let reply = try? await wire.call(.completeFolder(word: word, profile: profile)) else { return .init() }
+        return HermesFolderCompletion.suggestions(from: reply, typed: word)
     }
 
     func clearProjectSheetError() {

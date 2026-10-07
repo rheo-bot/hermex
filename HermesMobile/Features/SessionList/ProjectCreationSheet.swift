@@ -33,8 +33,9 @@ enum ProjectCreationPalette {
 struct ProjectFolderField {
     /// What the field starts with, such as the working folder of the session being moved.
     var initialPath: String
-    /// The host's folders that complete a typed path, each ending in `/`.
-    var complete: (String) async -> [String]
+    /// The host's folders that complete a typed path, each ending in `/`, and whether to ask
+    /// for more of the name.
+    var complete: (String) async -> HermesFolderCompletion.Suggestions
 }
 
 struct ProjectCreationSheet: View {
@@ -118,6 +119,7 @@ private struct ProjectFormSheet: View {
     @State private var selectedColorHex: String?
     @State private var folderPath: String
     @State private var folderSuggestions: [String] = []
+    @State private var folderNeedsMoreTyping = false
     @FocusState private var nameIsFocused: Bool
 
     init(
@@ -209,8 +211,9 @@ private struct ProjectFormSheet: View {
         folderPath.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// The folder field and, under it, the host's folders that complete what is typed. A pick
-    /// fills the field and lists that folder's own folders next.
+    /// The folder field and, under it, the host's folders that complete what is typed, or a hint
+    /// to type more when the host's listing ran out before any folder. A pick fills the field and
+    /// lists that folder's own folders next.
     private func folderSection(_ folder: ProjectFolderField) -> some View {
         Section {
             TextField(text: $folderPath, prompt: Text(verbatim: "~/Projects/app")) {
@@ -236,6 +239,12 @@ private struct ProjectFormSheet: View {
                 .disabled(isSaving)
                 .accessibilityLabel(Text(verbatim: suggestion))
             }
+
+            if folderNeedsMoreTyping {
+                Text("Type more of the folder name.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("Folder")
         } footer: {
@@ -246,7 +255,8 @@ private struct ProjectFormSheet: View {
             guard (try? await Task.sleep(for: .milliseconds(250))) != nil else { return }
             let suggestions = await folder.complete(trimmedFolderPath)
             guard !Task.isCancelled else { return }
-            folderSuggestions = Array(suggestions.filter { $0 != trimmedFolderPath }.prefix(Self.folderSuggestionLimit))
+            folderSuggestions = Array(suggestions.folders.filter { $0 != trimmedFolderPath }.prefix(Self.folderSuggestionLimit))
+            folderNeedsMoreTyping = suggestions.needsMoreTyping
         }
     }
 

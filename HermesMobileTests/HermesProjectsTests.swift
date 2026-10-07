@@ -208,8 +208,26 @@ import Observation
             .object(["text": .string("../.git/"), "display": .string(".git/"), "meta": .string("dir")])
         ])])
 
-        XCTAssertEqual(HermesFolderCompletion.folders(from: listing, typed: "~/"), ["~/src/"])
-        XCTAssertEqual(HermesFolderCompletion.folders(from: hidden, typed: "/Users/me/.g"), ["/Users/me/.git/"])
+        XCTAssertEqual(HermesFolderCompletion.suggestions(from: listing, typed: "~/"), .init(folders: ["~/src/"]))
+        XCTAssertEqual(
+            HermesFolderCompletion.suggestions(from: hidden, typed: "/Users/me/.g"), .init(folders: ["/Users/me/.git/"])
+        )
+        // A listing under the host's limit is complete, so offering nothing needs no hint.
+        XCTAssertEqual(HermesFolderCompletion.suggestions(from: hidden, typed: "~/"), .init())
+    }
+
+    /// The host lists 30 entries, hidden ones first, so a home folder's listing can end before
+    /// any folder the field offers. The field then asks for more of the name instead of
+    /// showing nothing.
+    func testAFullListingOfHiddenEntriesAsksForMoreOfTheName() {
+        let hiddenHome = BotJSON.object(["items": .array((0..<30).map { index in
+            .object(["text": .string("~/.cache\(index)/"), "display": .string(".cache\(index)/"), "meta": .string("dir")])
+        })])
+
+        XCTAssertEqual(HermesFolderCompletion.suggestions(from: hiddenHome, typed: "~/"), .init(needsMoreTyping: true))
+        XCTAssertEqual(
+            HermesFolderCompletion.suggestions(from: hiddenHome, typed: "~/.c"), .init(folders: (0..<30).map { "~/.cache\($0)/" })
+        )
     }
 
     // MARK: Fixtures
