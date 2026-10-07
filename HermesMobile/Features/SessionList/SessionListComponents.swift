@@ -100,21 +100,25 @@ struct SessionListRowActions {
     let export: (SessionSummary, SessionExportFormat) -> Void
 }
 
-/// Which row actions a session offers. A Hermes server's row (#1046) offers only Copy Full
-/// Title and Mark as Read or Unread; the slices of #702 that build its pin, rename, archive,
-/// delete, duplicate, move and export add them here.
+/// Which row actions a session offers. A Hermes server's row (#1046, #1048) offers pin,
+/// rename, archive, delete and Export as JSON. Duplicate and Move to Project wait on later
+/// slices of #702; the host has no HTML export, and Hermes deep links are #706.
 enum SessionRowActionPolicy {
     static func offersMutationActions(for session: SessionSummary) -> Bool {
-        !session.isSessionReadOnly && session.hermes == nil
+        !session.isSessionReadOnly
     }
 
-    /// Export and Copy Deeplink, which only a webui server answers.
-    static func offersExport(for session: SessionSummary) -> Bool {
-        session.hermes == nil
+    static func offersProjectMove(for session: SessionSummary) -> Bool {
+        offersMutationActions(for: session) && session.hermes == nil
+    }
+
+    /// The Export menu's formats, in menu order.
+    static func exportFormats(for session: SessionSummary) -> [SessionExportFormat] {
+        session.hermes == nil ? [.html, .json] : [.json]
     }
 
     static func canDuplicate(_ session: SessionSummary) -> Bool {
-        offersMutationActions(for: session) && !session.requiresExternalImport
+        offersMutationActions(for: session) && session.hermes == nil && !session.requiresExternalImport
     }
 
     static func canExport(_ session: SessionSummary, isViewingCachedData: Bool) -> Bool {
@@ -126,7 +130,7 @@ enum SessionRowActionPolicy {
         isViewingCachedData: Bool,
         isMutating: Bool
     ) -> URL? {
-        guard !isMutating,
+        guard !isMutating, session.hermes == nil,
               canExport(session, isViewingCachedData: isViewingCachedData),
               let sessionID = session.sessionId
         else {
@@ -921,26 +925,26 @@ struct SessionRowContextMenu: View {
                 .disabled(isViewingCachedData || session.sessionId == nil || isMutating)
             }
 
-            Menu {
-                SessionProjectMoveMenu(
-                    session: session,
-                    projects: projects,
-                    isCreatingProject: isCreatingProject,
-                    isMovingSession: isMovingSession,
-                    isLoadingProjects: isLoadingProjects,
-                    actions: actions
-                )
-            } label: {
-                Label("Move to Project", systemImage: "folder")
+            if SessionRowActionPolicy.offersProjectMove(for: session) {
+                Menu {
+                    SessionProjectMoveMenu(
+                        session: session,
+                        projects: projects,
+                        isCreatingProject: isCreatingProject,
+                        isMovingSession: isMovingSession,
+                        isLoadingProjects: isLoadingProjects,
+                        actions: actions
+                    )
+                } label: {
+                    Label("Move to Project", systemImage: "folder")
+                }
+                .disabled(isViewingCachedData || session.sessionId == nil || isMutating)
             }
-            .disabled(isViewingCachedData || session.sessionId == nil || isMutating)
         }
 
         // Export works for any session the server can see, including read-only
         // and foreign/CLI rows; it only needs a live server session ID.
-        if SessionRowActionPolicy.offersExport(for: session) {
-            exportMenu
-        }
+        exportMenu
 
         if SessionRowActionPolicy.offersMutationActions(for: session) {
             Button {
@@ -961,16 +965,21 @@ struct SessionRowContextMenu: View {
 
     private var exportMenu: some View {
         Menu {
-            Button {
-                actions.export(session, .html)
-            } label: {
-                Label("Export as HTML", systemImage: "doc.richtext")
-            }
-
-            Button {
-                actions.export(session, .json)
-            } label: {
-                Label("Export as JSON", systemImage: "curlybraces")
+            ForEach(SessionRowActionPolicy.exportFormats(for: session), id: \.self) { format in
+                switch format {
+                case .html:
+                    Button {
+                        actions.export(session, .html)
+                    } label: {
+                        Label("Export as HTML", systemImage: "doc.richtext")
+                    }
+                case .json:
+                    Button {
+                        actions.export(session, .json)
+                    } label: {
+                        Label("Export as JSON", systemImage: "curlybraces")
+                    }
+                }
             }
 
             if let deepLinkURL = SessionRowActionPolicy.deepLinkURL(

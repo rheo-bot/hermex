@@ -1138,6 +1138,45 @@ the inbox does. The socket listens while the list is on screen, rests while a ch
 background, and reconnects on the inbox's backoff after a drop. It stops on the refusals the
 inbox stops on (`BotConnectionAdvice.isRetryable`); pull to refresh tries again.
 
+### Row actions (#1048)
+
+A Hermes row's menu and swipes rename, pin, archive, delete and Export as JSON
+(`SessionRowActionPolicy`). Duplicate and Move to Project wait on later slices of #702; the
+host has no HTML export, and Hermes deep links are #706. Each action goes to the row's own
+Profile.
+
+- **Pin, archive and rename** are `PATCH /api/sessions/{id}` with one field and `profile` in
+  the body (`HermesSessionChange`). `pinned` and `archived` apply across the compression
+  lineage, and `pinned: true` also unhides. Pin and archive show at once and put the row back,
+  where it stood, if the host refuses; a list read already out is dropped and the list reads
+  again once the host answers. An archive shows "Archived · Undo" once the host confirms
+  (#865). A rename keeps the host's cleaned title; its refusals (a title in use, over 100
+  characters, the canonical Bot Chat's) are 400 `{detail}` and stay in the rename sheet.
+- **Delete** is `session.delete {session_id, profile}`, never REST `DELETE`, which has no
+  live-runtime check. The host refuses (4023) while any runtime in its process holds the
+  session, and keeps a runtime after its screen leaves, so `HermesSessionDeletion` closes this
+  phone's own idle runtimes on the session first (`session.close`): the runtimes a
+  `session.resume` on the connection reached (`HermesConnection.attachedRuntimes`), as
+  `session.active_list` still lists them. A busy one refuses before anything is sent ("Stop the
+  reply first"); a 4023 after that is another app's runtime, and nothing changed. The host
+  can't say who else views a runtime this phone attached, so closing it ends it for them too.
+  The host does not check runtimes in another process, such as Desktop's own gateway.
+- **Export as JSON** is `GET /api/sessions/{id}/export?profile=`: the session row with every
+  message, unredacted (system prompt and host paths included), written to a temp file named
+  after the title and offered in the share sheet.
+- **Archived Sessions**, at the list's end and in Settings, is `ArchivedSessionsView` with a
+  `HermesArchiveSource`: `GET /api/sessions?profile=&order=recent&archived=only&limit=100&offset=&exclude_sources=…`
+  (no `min_messages`), paged as the list is. The hidden filter is off there, so archived
+  hidden Bot Chats are listed, as "Bot Chat · <Profile>"; the pinned back-fill still brings
+  unarchived pinned rows, so only `archived` rows are kept. Unarchive and Delete work as on
+  the list; a restored Bot Chat is back in the Bots inbox. From the list it shows the list's
+  Profile; from Settings, the server's pick, else the dashboard's `current`.
+
+Contract checked against `scripts/local-hermes` at the `HERMES_AGENT_TESTED_SHA` pin
+(`ca678285`, 0.21.5): `hermes_cli/web_routers/sessions.py` (`rename_session_endpoint`,
+`export_session_endpoint`) and `tui_gateway/methods_session.py` (`session.delete`,
+`session.close`, `session.title`).
+
 ## Tasks on a Hermes host
 
 The Tasks screens run on a Hermes host through `HermesCronClient` (#1040), the
@@ -1686,13 +1725,16 @@ from `replace_from`.
 Send resolves a draft that opens with `/name` in this order:
 
 1. **Hermex's own** (`SlashCommandCatalog.hermesCommands`): `/new`, `/stop`,
-   `/model`, `/reasoning`, `/personality`, `/goal`, `/btw`, `/bg` and
+   `/model`, `/reasoning`, `/personality`, `/title`, `/goal`, `/btw`, `/bg` and
    `/background`, and `/yolo` (the session's `config.set yolo`). Each keeps its
-   native path; an alias such as `/reset` resolves to its command first.
+   native path; an alias such as `/reset` resolves to its command first. `/title`
+   (#1048) is `session.title {session_id: <runtime>, title}`; the header takes the
+   title the host kept, and `session.info`'s `title` after that. A title in use or
+   too long is 4022 with the host's message, and the draft stays.
 2. **Held until #702 slice 2.3** (`hermesHeldNames`): `/compress`, `/compact`,
-   `/undo`, `/retry`, `/clear`, `/branch`, `/fork`, `/title`, `/resume`,
-   `/sessions`. They rewrite history or move between chats, so they show a notice
-   naming #702 and send nothing.
+   `/undo`, `/retry`, `/clear`, `/branch`, `/fork`, `/resume`, `/sessions`. They
+   rewrite history or move between chats, so they show a notice naming #702 and
+   send nothing.
 3. **A catalog skill**: `command.dispatch` expands it and `message` is submitted.
 4. **Any other catalog command or alias**: `slash.exec {session_id, command}`
    with the typed line, once.

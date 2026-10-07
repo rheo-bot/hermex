@@ -144,23 +144,44 @@ import Foundation
         return audio
     }
 
-    func sessionPage(profile: String, offset: Int) async throws -> HermesSessionPage {
+    func sessionPage(profile: String, offset: Int, archived: Bool) async throws -> HermesSessionPage {
         guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
         let attempt = self.attempt
-        let data = try await http.data(.sessionList(profile: profile, offset: offset),
+        let data = try await http.data(.sessionList(profile: profile, offset: offset, archived: archived),
                                        validateDispatch: { try self.checkOwner(attempt) })
         try checkOwner(attempt)
         guard let page = try? JSONDecoder().decode(HermesSessionPage.self, from: data) else { throw BotFailure.unsupported }
         return page
     }
 
-    func setSessionUnread(_ unread: Bool, key: String, profile: String) async throws {
+    @discardableResult
+    func updateSession(_ change: HermesSessionChange, key: String, profile: String) async throws -> String? {
         guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
         let attempt = self.attempt
-        _ = try await http.data(.updateSession(key: key, profile: profile, unread: unread),
-                                validateDispatch: { try self.checkOwner(attempt) })
+        let reply = try await http.reply(.updateSession(key: key, profile: profile, change: change),
+                                         validateDispatch: { try self.checkOwner(attempt) })
         try checkOwner(attempt)
+        let body = try? JSONDecoder().decode(BotJSON.self, from: reply.body)
+        guard reply.status == 200 else {
+            if reply.status == 400, let detail = body?["detail"].text?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !detail.isEmpty {
+                throw HermesSessionRefusal(message: detail)
+            }
+            throw BotFailure.rejected(reply.status)
+        }
+        return body?["title"].text
     }
+
+    func exportSession(key: String, profile: String) async throws -> Data {
+        guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
+        let attempt = self.attempt
+        let data = try await http.data(.sessionExport(key: key, profile: profile), deadline: .provisioning,
+                                       validateDispatch: { try self.checkOwner(attempt) })
+        try checkOwner(attempt)
+        return data
+    }
+
+    var attachedRuntimes: Set<String> { http.attachedRuntimes }
 
     func uploadImage(data: Data, filename: String, context: BotArtifactContext) async throws -> String {
         guard context.connectionID == http.connection.id, gateway.isAttached(consumerID) else { throw BotFailure.stale }

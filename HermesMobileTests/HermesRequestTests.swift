@@ -42,6 +42,11 @@ final class HermesRequestTests: XCTestCase {
             (.sessionCreate(profile: "triage"), "session.create",
              ["profile": .string("triage"), "title": .string("Bot Chat"), "hidden": .bool(true), "follow_profile_config": .bool(true)]),
             (.sessionTitle(sessionID: "runtime"), "session.title", ["session_id": .string("runtime"), "title": .string("Bot Chat")]),
+            (.sessionRename(runtime: "runtime", title: "Plan"), "session.title",
+             ["session_id": .string("runtime"), "title": .string("Plan")]),
+            (.sessionClose(runtime: "runtime"), "session.close", ["session_id": .string("runtime")]),
+            (.sessionDelete(profile: "triage", storedKey: "tip"), "session.delete",
+             ["session_id": .string("tip"), "profile": .string("triage")]),
             (.sessionResume(profile: "triage", sessionID: "tip", omitMessages: false), "session.resume",
              ["profile": .string("triage"), "session_id": .string("tip"), "close_on_disconnect": .bool(false)]),
             (.sessionResume(profile: "triage", sessionID: "tip", omitMessages: true), "session.resume",
@@ -140,6 +145,15 @@ final class HermesRequestTests: XCTestCase {
         }
     }
 
+    /// A rename needs a runtime and a title, and a delete names its Profile and stored key (#1048).
+    func testSessionLifecycleCallsRefuseAnEmptyTarget() {
+        XCTAssertThrowsError(try HermesCall.sessionRename(runtime: "runtime", title: " \n").params())
+        XCTAssertThrowsError(try HermesCall.sessionRename(runtime: "", title: "Plan").params())
+        XCTAssertThrowsError(try HermesCall.sessionClose(runtime: "").params())
+        XCTAssertThrowsError(try HermesCall.sessionDelete(profile: "", storedKey: "tip").params())
+        XCTAssertThrowsError(try HermesCall.sessionDelete(profile: "triage", storedKey: "").params())
+    }
+
     /// Slash commands go out one typed line at a time, and completion only at a command's
     /// argument stage (#1036).
     func testSlashCallsAdmitOnlyOneNamedLine() {
@@ -188,6 +202,13 @@ final class HermesRequestTests: XCTestCase {
             (.pluginsHub, "GET", "https://hermes.example:9120/api/dashboard/plugins/hub", nil, [:]),
             (.sessionMessages(key: "bg_0a5110", profile: "triage"), "GET",
              "https://hermes.example:9120/api/sessions/bg_0a5110/messages?profile=triage", nil, [:]),
+            (.sessionList(profile: "triage", offset: 100, archived: true), "GET",
+             "https://hermes.example:9120/api/sessions?profile=triage&order=recent&archived=only&limit=100&offset=100&exclude_sources=cron,kanban,oneshot,subagent,tool",
+             nil, [:]),
+            (.updateSession(key: "tip", profile: "triage", change: .title("Plan")), "PATCH",
+             "https://hermes.example:9120/api/sessions/tip", .object(["title": .string("Plan"), "profile": .string("triage")]), json),
+            (.sessionExport(key: "tip", profile: "triage"), "GET",
+             "https://hermes.example:9120/api/sessions/tip/export?profile=triage", nil, [:]),
             (.cronJobs, "GET", "https://hermes.example:9120/api/cron/jobs", nil, [:]),
             (.cronCreate(profile: "research", fields: ["schedule": .string("0 9 * * *")]), "POST",
              "https://hermes.example:9120/api/cron/jobs?profile=research", .object(["schedule": .string("0 9 * * *")]), json),

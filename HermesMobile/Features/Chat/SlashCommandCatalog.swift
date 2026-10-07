@@ -215,8 +215,9 @@ enum SlashCommandCatalog {
 
     /// The commands a Hermes chat runs itself (#1036): each has a native path, so the host's
     /// command of the same name never runs. Every other command its host lists runs there.
-    static let hermesCommands: [SlashCommand] = ["new", "stop", "model", "reasoning", "personality", "goal", "btw",
-                                                 "background", "bg"].compactMap(command(named:)) + [
+    /// `/title` is `session.title` on the chat's runtime (#1048).
+    static let hermesCommands: [SlashCommand] = ["new", "stop", "model", "reasoning", "personality", "title", "goal",
+                                                 "btw", "background", "bg"].compactMap(command(named:)) + [
         SlashCommand(
             name: "yolo",
             description: String(localized: "Skip approvals in this chat, or ask again"),
@@ -232,7 +233,7 @@ enum SlashCommandCatalog {
     /// Host commands a Hermes chat holds until #702 slice 2.3: they rewrite history or move
     /// between chats, so the host alone would leave the phone stale. Listed, never run.
     static let hermesHeldNames: Set<String> = ["compress", "compact", "undo", "retry", "clear", "branch", "fork",
-                                               "title", "resume", "sessions"]
+                                               "resume", "sessions"]
 
     static let reasoningLevels = ["show", "hide", "none", "minimal", "low", "medium", "high", "xhigh"]
     static let goalActions = ["status", "pause", "resume", "clear"]

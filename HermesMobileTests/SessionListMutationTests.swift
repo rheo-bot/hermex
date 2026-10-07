@@ -3118,6 +3118,23 @@ final class SessionListMutationTests: XCTestCase {
         XCTAssertTrue(requestedPaths.isEmpty)
     }
 
+    /// A Hermes row (#1048) offers pin, rename, archive, delete and Export as JSON. Duplicate and
+    /// Move wait on later slices of #702; the host has no HTML export, and Hermes deep links are #706.
+    func testAHermesRowOffersItsActionsButNotDuplicateMoveHTMLOrDeeplink() {
+        let row = HermesSessionRow(id: "20261005_101500_a1b2c3").summary(in: "default")
+
+        XCTAssertTrue(SessionRowActionPolicy.offersMutationActions(for: row))
+        XCTAssertFalse(SessionRowActionPolicy.canDuplicate(row))
+        XCTAssertFalse(SessionRowActionPolicy.offersProjectMove(for: row))
+        XCTAssertEqual(SessionRowActionPolicy.exportFormats(for: row), [.json])
+        XCTAssertNil(SessionRowActionPolicy.deepLinkURL(for: row, isViewingCachedData: false, isMutating: false))
+
+        let webui = SessionSummary(sessionId: "webui")
+        XCTAssertTrue(SessionRowActionPolicy.offersProjectMove(for: webui))
+        XCTAssertEqual(SessionRowActionPolicy.exportFormats(for: webui), [.html, .json])
+        XCTAssertNotNil(SessionRowActionPolicy.deepLinkURL(for: webui, isViewingCachedData: false, isMutating: false))
+    }
+
     func testCopyDeepLinkUsesExportAvailabilityRules() throws {
         let session = SessionSummary(sessionId: "session & /?=✓", readOnly: true)
 

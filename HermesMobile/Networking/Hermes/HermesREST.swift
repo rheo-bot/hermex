@@ -59,6 +59,10 @@ import Foundation
 /// session on `scripts/local-hermes` and the shape of a read-only page from a 0.21.5 host:
 /// `{session_id, profile, messages, pagination: {limit, offset, order, returned}}`, each page
 /// oldest first, with no total, so a short page is the start.
+/// The row actions (#1048) are read at the same pin and checked against `scripts/local-hermes`: a
+/// PATCH answers `{ok, title, <flag>}`, a refused title (in use, over 100 characters, the canonical
+/// Bot Chat) is 400 `{detail}`, an archived list back-fills non-archived pinned rows, and the
+/// export is the session row with its `messages`, without a `Content-Disposition`.
 enum HermesREST: Equatable, Sendable {
     /// The most rows `GET /api/sessions` lists in one page.
     static let sessionPageSize = 100
@@ -102,11 +106,14 @@ enum HermesREST: Equatable, Sendable {
     case sessionMessages(key: String, profile: String, offset: Int? = nil)
     /// One page of `profile`'s sessions for the Sessions list (#1046): latest activity first,
     /// without archived, empty or machine-run rows, `sessionPageSize` at a time from `offset`.
-    /// Each page also brings every pinned row it missed, archived ones included.
-    case sessionList(profile: String, offset: Int)
-    /// Sets a session's read mark for every client, across its compression lineage: `false`
-    /// reads it up to now, `true` marks it unread (#1046).
-    case updateSession(key: String, profile: String, unread: Bool)
+    /// Each page also brings every pinned row it missed, archived ones included. `archived`
+    /// reads the Archived screen's page instead (#1048): only archived rows, hidden Bot Chats
+    /// included, plus the same pinned back-fill.
+    case sessionList(profile: String, offset: Int, archived: Bool = false)
+    /// One change to a session, with `profile` in the body (#1046, #1048).
+    case updateSession(key: String, profile: String, change: HermesSessionChange)
+    /// That exact session's row and every message, unredacted, as one JSON object (#1048).
+    case sessionExport(key: String, profile: String)
     /// Every Profile's scheduled Tasks, paused and completed included: a bare array.
     case cronJobs
     /// Creates a Task in `profile`, or in the host's default Profile when nil.
@@ -285,7 +292,7 @@ enum HermesREST: Equatable, Sendable {
             }
             guard let url = parts.url else { throw BotFailure.invalidAddress }
             return Self.get(url)
-        case .sessionList(let profile, let offset):
+        case .sessionList(let profile, let offset, let archived):
             guard !profile.isEmpty, offset >= 0,
                   var parts = URLComponents(url: base.appendingPathComponent("api/sessions"), resolvingAgainstBaseURL: false)
             else { throw BotFailure.invalidAddress }
@@ -293,16 +300,20 @@ enum HermesREST: Equatable, Sendable {
             // and keep cron, Kanban, one-shot, subagent and tool runs.
             parts.queryItems = [
                 URLQueryItem(name: "profile", value: profile), URLQueryItem(name: "order", value: "recent"),
-                URLQueryItem(name: "archived", value: "exclude"), URLQueryItem(name: "limit", value: String(Self.sessionPageSize)),
-                URLQueryItem(name: "offset", value: String(offset)), URLQueryItem(name: "min_messages", value: "1"),
+                URLQueryItem(name: "archived", value: archived ? "only" : "exclude"),
+                URLQueryItem(name: "limit", value: String(Self.sessionPageSize)), URLQueryItem(name: "offset", value: String(offset))
+            ] + (archived ? [] : [URLQueryItem(name: "min_messages", value: "1")]) + [
                 URLQueryItem(name: "exclude_sources", value: "cron,kanban,oneshot,subagent,tool")
             ]
             guard let url = parts.url else { throw BotFailure.invalidAddress }
             return Self.get(url)
-        case .updateSession(let key, let profile, let unread):
+        case .updateSession(let key, let profile, let change):
             guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
             return try Self.send("PATCH", base.appendingPathComponent("api/sessions").appendingPathComponent(key),
-                                 ["unread": .bool(unread), "profile": .string(profile)])
+                                 [change.field: change.value, "profile": .string(profile)])
+        case .sessionExport(let key, let profile):
+            guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
+            return Self.get(try Self.url(base, "api/sessions/\(key)/export", profile: profile))
         case .cronJobs: return Self.get(base.appendingPathComponent("api/cron/jobs"))
         case .cronCreate(let profile, let fields):
             return try Self.send("POST", try Self.url(base, "api/cron/jobs", profile: profile), fields)
@@ -511,5 +522,32 @@ enum HermesREST: Equatable, Sendable {
         request.httpBody = try JSONEncoder().encode(BotJSON.object(body))
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return request
+    }
+}
+
+/// One change `HermesREST.updateSession` writes (#1046, #1048). `pinned` and `archived` apply
+/// across the session's compression lineage, and `pinned: true` also unhides it; `title` names
+/// that exact session, cleaned by the host, and the host refuses one already in use.
+enum HermesSessionChange: Equatable, Sendable {
+    /// `false` reads the session up to now for every client; `true` marks it unread.
+    case unread(Bool)
+    case pinned(Bool)
+    case archived(Bool)
+    case title(String)
+
+    fileprivate var field: String {
+        switch self {
+        case .unread: return "unread"
+        case .pinned: return "pinned"
+        case .archived: return "archived"
+        case .title: return "title"
+        }
+    }
+
+    fileprivate var value: BotJSON {
+        switch self {
+        case .unread(let flag), .pinned(let flag), .archived(let flag): return .bool(flag)
+        case .title(let title): return .string(title)
+        }
     }
 }

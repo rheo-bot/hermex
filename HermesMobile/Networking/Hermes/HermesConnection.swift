@@ -25,7 +25,8 @@ import OSLog
         /// takes the gateway down and back up. 15 seconds would read as a failure while
         /// the host was still succeeding. A sign-in provisioning starts gets them too, and so
         /// does a Task's Run Now, which the host answers once the run has finished (#1041), and
-        /// Listen's speech, whose first request can install the host's TTS engine (#1072).
+        /// Listen's speech, whose first request can install the host's TTS engine (#1072), and a
+        /// session export, which carries every message (#1048).
         case provisioning
     }
 
@@ -38,6 +39,13 @@ import OSLog
     /// a control one chat found missing stays off in every chat on it. Recorded by
     /// `gateway`; a new connection starts empty.
     private(set) var unavailableMethods: Set<String> = []
+    /// Every runtime a `session.resume` on this connection reached and no `session.close` here
+    /// ended (#1048), recorded by `gateway`. The host keeps a runtime after its screen leaves,
+    /// and refuses to delete a session any runtime holds, so a delete closes this phone's own
+    /// idle one first. It lasts as long as this connection, past any one socket, as the host's
+    /// runtimes do; one the host has since reaped stays here and is never in
+    /// `session.active_list` again.
+    private(set) var attachedRuntimes: Set<String> = []
     /// The standard-deadline session. The gateway socket opens on it, with its cookies.
     let session: URLSession
     /// Shares `session`'s cookie jar; only its deadlines differ.
@@ -94,6 +102,16 @@ import OSLog
     /// The gateway's report that the host answered `method` with -32601.
     func noteUnavailable(_ method: String) {
         unavailableMethods.insert(method)
+    }
+
+    /// The gateway's report that a `session.resume` reached `runtime`.
+    func noteAttached(_ runtime: String) {
+        attachedRuntimes.insert(runtime)
+    }
+
+    /// The gateway's report that a `session.close` here ended `runtime`.
+    func noteClosed(_ runtime: String) {
+        attachedRuntimes.remove(runtime)
     }
 
     /// Signs in unless this connection already is. Concurrent callers share one attempt,
@@ -191,17 +209,19 @@ import OSLog
 
     /// Sends one signed-in request built from `rest` and returns its body and status, whatever
     /// the status, for routes whose refusals carry the host's reason (`{detail}`), such as a
-    /// refused cron or Kanban write (#1044). A 401 still signs in again and resends once, as
-    /// `data` does.
-    func reply(_ rest: HermesREST, deadline: Deadline = .standard) async throws -> (body: Data, status: Int) {
-        try await reply(try rest.request(base: connection.address), deadline: deadline)
+    /// refused cron or Kanban write (#1044) or a session title (#1048). A 401 still signs in
+    /// again and resends once, as `data` does; `validateDispatch` is as in `authorized`.
+    func reply(_ rest: HermesREST, deadline: Deadline = .standard,
+               validateDispatch: (@MainActor () throws -> Void)? = nil) async throws -> (body: Data, status: Int) {
+        try await reply(try rest.request(base: connection.address), deadline: deadline, validateDispatch: validateDispatch)
     }
 
     /// `reply` for a request built off the main actor from a `HermesREST` case, such as
     /// dictation's base64 upload (#1071).
-    func reply(_ request: URLRequest, deadline: Deadline = .standard) async throws -> (body: Data, status: Int) {
+    func reply(_ request: URLRequest, deadline: Deadline = .standard,
+               validateDispatch: (@MainActor () throws -> Void)? = nil) async throws -> (body: Data, status: Int) {
         let redirectGuard = self.redirectGuard
-        return try await authorized(request, deadline: deadline) { request, session in
+        return try await authorized(request, deadline: deadline, validateDispatch: validateDispatch) { request, session in
             let (data, response) = try await Self.exchange(request, on: session, redirectGuard: redirectGuard)
             if response.statusCode == 401 { throw BotFailure.rejected(401) }
             return (data, response.statusCode)

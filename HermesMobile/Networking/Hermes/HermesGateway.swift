@@ -169,7 +169,7 @@ import OSLog
         } else { text = String(decoding: try JSONEncoder().encode(frame), as: UTF8.self) }
         let timesOutLocally = call.timesOutLocally, cancellationSafe = call.isCancellationSafe
         let rejection = call.rejection, rpcDeadline = call.deadline(options.rpcDeadline), method = call.method
-        return try await withTaskCancellationHandler {
+        let reply: BotJSON = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let deadline = Task { [weak self] in
                     do { try await Task.sleep(for: rpcDeadline) } catch { return }
@@ -196,6 +196,13 @@ import OSLog
         } onCancel: {
             Task { @MainActor [weak self] in self?.cancel(id, generation: owner, safely: cancellationSafe) }
         }
+        switch call {
+        case .sessionResume:
+            if let runtime = reply["session_id"].text, !runtime.isEmpty { http.noteAttached(runtime) }
+        case .sessionClose(let runtime): http.noteClosed(runtime)
+        default: break
+        }
+        return reply
     }
 
     /// A cancelled read discards its late reply. Any other cancelled call may have reached
@@ -468,14 +475,15 @@ private extension HermesCall {
 
     /// Room rejections carry the host's reason as `BotRoomFailure`; setting rejections
     /// carry its message as `BotSettingFailure`. So do a refused `/goal`, whose 4004 message
-    /// says what was wrong with it (#1013), and a refused slash command (#1036).
+    /// says what was wrong with it (#1013), a refused slash command (#1036), and a refused
+    /// `/title`, whose 4022 message names the session already using it (#1048).
     var rejection: Rejection {
         if method.hasPrefix("groups.") { return .room }
         switch self {
         case .configSet, .sessionCwdSet, .sessionControl, .modelOptions, .configuredModelOptions, .profileModelOptions,
              .sessionControlRead: return .setting
         case .commandDispatch(let name, _, _) where name == "goal": return .setting
-        case .slashExec: return .setting
+        case .slashExec, .sessionRename: return .setting
         default: return .plain
         }
     }

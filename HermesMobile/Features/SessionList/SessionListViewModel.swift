@@ -150,6 +150,8 @@ final class SessionListViewModel {
     private(set) var hermesProfile: String?
     /// The Hermes host's Profiles, for the Profile menu; empty until `profiles.list` answers.
     private(set) var hermesProfiles: [String] = []
+    /// The host's reason for refusing the last Hermes rename, shown in the rename sheet (#1048).
+    private(set) var renameErrorMessage: String?
     /// More of the Profile's sessions wait on the host.
     private(set) var hasMoreSessions = false
     private(set) var isLoadingMoreSessions = false
@@ -1002,6 +1004,7 @@ final class SessionListViewModel {
             return false
         }
 
+        if session.hermes != nil { return await changeHermesSession(session, .pinned(pinned), animation: animation) }
         guard beginSessionMutation(sessionId) else { return false }
         defer { endSessionMutation(sessionId) }
 
@@ -1020,6 +1023,7 @@ final class SessionListViewModel {
             return false
         }
 
+        if session.hermes != nil { return await changeHermesSession(session, .archived(true), animation: animation) }
         guard beginSessionMutation(sessionId) else { return false }
         defer { endSessionMutation(sessionId) }
 
@@ -1041,6 +1045,7 @@ final class SessionListViewModel {
             return false
         }
 
+        if session.hermes != nil { return await changeHermesSession(session, .archived(false), animation: animation) }
         guard beginSessionMutation(sessionId) else { return false }
         defer { endSessionMutation(sessionId) }
 
@@ -1059,6 +1064,7 @@ final class SessionListViewModel {
             return false
         }
 
+        if session.hermes != nil { return await deleteHermesSession(session, animation: animation) }
         guard beginSessionMutation(sessionId) else { return false }
         defer { endSessionMutation(sessionId) }
 
@@ -1088,6 +1094,7 @@ final class SessionListViewModel {
             return false
         }
 
+        if session.hermes != nil { return await renameHermesSession(session, to: title) }
         isRenamingSession = true
         actionErrorMessage = nil
         lastError = nil
@@ -1170,11 +1177,11 @@ final class SessionListViewModel {
         }
     }
 
-    /// Downloads the session transcript (`GET /api/session/export`) and writes
-    /// it to a unique temp directory so the share sheet can offer it as a file
-    /// with a real filename. Returns the file URL, or nil after surfacing the
-    /// failure through the standard action-error alert. The caller owns
-    /// cleanup of the returned file's parent directory after sharing.
+    /// Downloads the session transcript (`GET /api/session/export`, or a Hermes host's
+    /// `GET /api/sessions/{id}/export`, JSON only, #1048) and writes it to a unique temp
+    /// directory so the share sheet can offer it as a file with a real filename. Returns the
+    /// file URL, or nil after surfacing the failure through the standard action-error alert.
+    /// The caller owns cleanup of the returned file's parent directory after sharing.
     func export(_ session: SessionSummary, format: SessionExportFormat) async -> URL? {
         guard !isViewingCachedData else {
             actionErrorMessage = String(localized: "Reconnect to the server to export a session.")
@@ -1196,11 +1203,9 @@ final class SessionListViewModel {
         lastError = nil
 
         do {
-            let file = try await client.exportSession(
-                id: sessionId,
-                format: format,
-                fallbackTitle: session.title
-            )
+            let file = try await session.hermes == nil
+                ? client.exportSession(id: sessionId, format: format, fallbackTitle: session.title)
+                : exportHermesSession(session, key: sessionId, format: format)
 
             let directory = Self.exportsRootDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1746,7 +1751,7 @@ final class SessionListViewModel {
         isLoadingMoreSessions = true
         defer { if serial == hermesReadSerial { isLoadingMoreSessions = false } }
         do {
-            let page = try await wire.sessionPage(profile: profile, offset: hermesPages.nextOffset)
+            let page = try await wire.sessionPage(profile: profile, offset: hermesPages.nextOffset, archived: false)
             guard serial == hermesReadSerial, hermesWire === wire else { return }
             var pages = hermesPages
             pages.append(page)
@@ -1781,7 +1786,7 @@ final class SessionListViewModel {
         var pages = HermesSessionPages()
         do {
             while pages.hasMore, pages.nextOffset < wanted {
-                let page = try await wire.sessionPage(profile: profile, offset: pages.nextOffset)
+                let page = try await wire.sessionPage(profile: profile, offset: pages.nextOffset, archived: false)
                 guard serial == hermesReadSerial, hermesWire === wire else { return }
                 pages.append(page)
             }
@@ -1832,7 +1837,7 @@ final class SessionListViewModel {
         hermesUnreadWrites[key] = Task { [weak self] in
             await earlier?.value
             let written: Bool
-            do { try await wire.setSessionUnread(unread, key: key, profile: profile); written = true } catch { written = false }
+            do { try await wire.updateSession(.unread(unread), key: key, profile: profile); written = true } catch { written = false }
             guard let self, self.hermesUnreadMarks[key]?.id == mark.id else { return }
             if written { self.hermesUnreadMarks[key]?.settledBefore = self.hermesReadSerial + 1 } else { self.hermesUnreadMarks[key] = nil }
         }
@@ -1981,6 +1986,139 @@ final class SessionListViewModel {
     /// Writes only a real change, so an unchanged re-read never invalidates the rows.
     private func setHermesStates(_ states: [String: SessionRowAttentionState]) {
         if states != attentionStatesBySessionID { attentionStatesBySessionID = states }
+    }
+
+    // MARK: Hermes row actions (#1048)
+
+    func clearRenameError() {
+        renameErrorMessage = nil
+    }
+
+    /// The list's client, the session's key and its Profile, or nil after saying why not.
+    private func hermesTarget(_ session: SessionSummary) -> (wire: any BotTransport, key: String, profile: String)? {
+        guard let key = Self.nonEmpty(session.sessionId) else {
+            actionErrorMessage = String(localized: "The server did not provide a session ID.")
+            return nil
+        }
+        guard let wire = hermesWire, let profile = Self.nonEmpty(session.profile) ?? hermesProfile else {
+            showHermesActionFailure(BotFailure.transport)
+            return nil
+        }
+        return (wire, key, profile)
+    }
+
+    /// Pins, archives or restores a row: shows the change at once, writes it, and puts the row
+    /// back if the host refuses. A list read already out predates the change, so it is dropped,
+    /// and the list reads again once the host has answered.
+    private func changeHermesSession(_ session: SessionSummary, _ change: HermesSessionChange,
+                                     animation: Animation?) async -> Bool {
+        guard let target = hermesTarget(session), beginSessionMutation(target.key) else { return false }
+        let (wire, key, profile) = target
+        defer { endSessionMutation(key) }
+        actionErrorMessage = nil
+        hermesReadSerial += 1
+        var pages = hermesPages
+        let before = pages.apply(change, to: key)
+        showHermesPages(pages, animation: animation)
+        do {
+            try await wire.updateSession(change, key: key, profile: profile)
+            requestHermesReload()
+            return true
+        } catch {
+            if let before {
+                var pages = hermesPages
+                pages.restore(before.row, at: before.index)
+                showHermesPages(pages, animation: animation)
+            }
+            requestHermesReload()
+            if !Task.isCancelled { showHermesActionFailure(error) }
+            return false
+        }
+    }
+
+    /// Deletes a row through `HermesSessionDeletion`, once the host confirms; a busy or held
+    /// session stays, and the list says why.
+    private func deleteHermesSession(_ session: SessionSummary, animation: Animation?) async -> Bool {
+        guard let target = hermesTarget(session), beginSessionMutation(target.key) else { return false }
+        let (wire, key, profile) = target
+        defer { endSessionMutation(key) }
+        actionErrorMessage = nil
+        do {
+            let outcome = try await HermesSessionDeletion.delete(key: key, profile: profile, on: wire)
+            if let refusal = HermesSessionDeletion.message(for: outcome) {
+                actionErrorMessage = refusal
+                return false
+            }
+            hermesReadSerial += 1
+            var pages = hermesPages
+            pages.remove(key)
+            showHermesPages(pages, animation: animation)
+            requestHermesReload()
+            return true
+        } catch {
+            if !Task.isCancelled { showHermesActionFailure(error) }
+            return false
+        }
+    }
+
+    /// Renames a row from the rename sheet. The host cleans the title, and its refusal (a title
+    /// in use, too long, or a Bot Chat's) stays in the sheet as `renameErrorMessage`.
+    private func renameHermesSession(_ session: SessionSummary, to title: String) async -> Bool {
+        guard let target = hermesTarget(session) else {
+            // The sheet is up, so the reason goes there rather than to the list's alert.
+            renameErrorMessage = actionErrorMessage
+            actionErrorMessage = nil
+            return false
+        }
+        let (wire, key, profile) = target
+        isRenamingSession = true
+        renameErrorMessage = nil
+        actionErrorMessage = nil
+        defer { isRenamingSession = false }
+        do {
+            let kept = try await wire.updateSession(.title(title), key: key, profile: profile)
+            hermesReadSerial += 1
+            var pages = hermesPages
+            _ = pages.apply(.title(Self.nonEmpty(kept) ?? title), to: key)
+            showHermesPages(pages, animation: nil)
+            requestHermesReload()
+            return true
+        } catch {
+            if !Task.isCancelled { renameErrorMessage = hermesActionFailure(error) }
+            return false
+        }
+    }
+
+    /// The host's JSON export, named after the row's title. The host has no HTML export.
+    private func exportHermesSession(_ session: SessionSummary, key: String,
+                                     format: SessionExportFormat) async throws -> SessionExportFile {
+        guard format == .json, let wire = hermesWire,
+              let profile = Self.nonEmpty(session.profile) ?? hermesProfile else { throw BotFailure.transport }
+        let data = try await wire.exportSession(key: key, profile: profile)
+        return SessionExportFile(data: data, filename: SessionExportFile.filename(
+            contentDisposition: nil, fallbackTitle: SessionRowView.displayTitle(for: session), sessionID: key, format: .json
+        ))
+    }
+
+    /// Shows `pages` without reading the host: a change this phone made.
+    private func showHermesPages(_ pages: HermesSessionPages, animation: Animation?) {
+        guard let profile = hermesProfile else { return }
+        hermesPages = pages
+        let rows = pages.rows.map { $0.summary(in: profile) }
+        guard rows != sessions else { return }
+        if let animation { withAnimation(animation) { sessions = rows } } else { sessions = rows }
+    }
+
+    private func showHermesActionFailure(_ error: Error) {
+        actionErrorMessage = hermesActionFailure(error)
+    }
+
+    /// Why a row action failed: the host's own reason, what to check when it can't be reached,
+    /// or the connection's state.
+    private func hermesActionFailure(_ error: Error) -> String {
+        if let refusal = error as? HermesSessionRefusal { return refusal.message }
+        if error is URLError, let hermes { return BotConnectionAdvice.message(for: error, address: hermes.connection.address) }
+        return error.localizedDescription
     }
 
     private func mutate(

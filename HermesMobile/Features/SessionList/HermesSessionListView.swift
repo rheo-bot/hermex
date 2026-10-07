@@ -16,15 +16,23 @@ struct HermesSessionListEntry: Hashable, Identifiable {
 /// menu, on a `SessionListViewModel` with a Hermes backend. It is pushed onto the Hermes home's
 /// stack (from the inbox's + menu until #709), so it brings no navigation container of its own,
 /// and a row opens in the main chat on top of it. Its socket listens while it is on screen, rests
-/// while a chat covers it, and closes when it leaves or the app goes to the background.
+/// while a chat covers it, and closes when it leaves or the app goes to the background. Rows
+/// rename, pin, archive (with Undo and an Archived screen), delete and export as JSON (#1048).
 struct HermesSessionListView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(SessionRowDisplaySettings.showMessageCountKey) private var showsMessageCount = true
     @AppStorage(SessionRowDisplaySettings.showWorkspaceKey) private var showsWorkspace = true
+    @AppStorage(AppHaptics.isEnabledKey) private var isHapticsEnabled = true
     private let entry: HermesSessionListEntry
     @State private var viewModel: SessionListViewModel
     /// The chat a row or New Session opened.
     @State private var chat: HermesSessionChat?
+    @State private var renaming: SessionSummary?
+    @State private var deleting: SessionSummary?
+    @State private var exported: SessionExportShareItem?
+    @State private var showingArchived = false
+    @State private var actionToast = ActionToastState()
 
     init(entry: HermesSessionListEntry) {
         self.entry = entry
@@ -48,9 +56,16 @@ struct HermesSessionListView: View {
                 actions: actions
             )
             if viewModel.hasMoreSessions { loadMoreRow }
+            archivedRow
         }
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 0)
+        .overlay(alignment: .bottom) {
+            ActionToastView(state: actionToast)
+                .frame(maxWidth: 420)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 22)
+        }
         .refreshable { await viewModel.openHermes() }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
@@ -66,8 +81,32 @@ struct HermesSessionListView: View {
         .navigationDestination(item: $chat) { chat in
             ChatView(hermesSession: chat) { self.chat = $0 }.id(chat.id)
         }
+        .navigationDestination(isPresented: $showingArchived) {
+            ArchivedSessionsView(server: entry.server, hermes: .saved(entry.connection, server: entry.server, profile: profile))
+        }
+        .sheet(item: $renaming, onDismiss: { viewModel.clearRenameError() }) { session in
+            SessionRenameSheet(initialTitle: SessionRowView.displayTitle(for: session), isSaving: viewModel.isRenamingSession,
+                               errorMessage: viewModel.renameErrorMessage) {
+                renaming = nil
+            } onSave: { title in
+                Task { if await rename(session, to: title) { renaming = nil } }
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(item: $exported) { item in
+            SessionExportShareSheet(fileURL: item.fileURL)
+                .presentationDetents([.medium, .large])
+                .ignoresSafeArea()
+                // Each export has its own temp directory (`SessionListViewModel.export`).
+                .onDisappear { try? FileManager.default.removeItem(at: item.fileURL.deletingLastPathComponent()) }
+        }
+        .modifier(SessionActionConfirmations(
+            viewModel: viewModel, sessionPendingDeletion: $deleting, projectPendingDeletion: .constant(nil),
+            deleteSession: { session in Task { await delete(session) } }, deleteProject: { _ in }
+        ))
         .task { await viewModel.openHermes() }
         .onDisappear {
+            actionToast.dismiss()
             if chat == nil { viewModel.closeHermes() } else { viewModel.pauseHermes() }
         }
         .onChange(of: chat) { old, new in
@@ -77,7 +116,8 @@ struct HermesSessionListView: View {
             switch scenePhase {
             case .background: viewModel.closeHermes()
             // Control Center and banners (`.inactive`) keep the socket; only a closed list reopens.
-            case .active where chat == nil && !viewModel.isHermesConnected: Task { await viewModel.openHermes() }
+            case .active where chat == nil && !showingArchived && !viewModel.isHermesConnected:
+                Task { await viewModel.openHermes() }
             default: break
             }
         }
@@ -115,8 +155,36 @@ struct HermesSessionListView: View {
             .onAppear { Task { await viewModel.loadMoreHermesSessions() } }
     }
 
-    /// Opening a row and Mark as Read or Unread; the actions later slices of #702 build are
-    /// hidden by `SessionRowActionPolicy`.
+    /// The Profile's archived sessions, hidden Bot Chats included, where they are restored.
+    private var archivedRow: some View {
+        Button {
+            showingArchived = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "archivebox")
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                Text("Archived Sessions")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.forward")
+                    .font(.caption.weight(.semibold))
+                    .accessibilityHidden(true)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 24)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 12)
+        .accessibilityHint("Shows archived sessions.")
+        .sessionsScreenListRow()
+    }
+
+    /// Opening a row, Mark as Read or Unread, and the row actions `SessionRowActionPolicy`
+    /// offers a Hermes row; Duplicate and Move wait on later slices of #702.
     private var actions: SessionListRowActions {
         SessionListRowActions(
             retryLoad: { Task { await viewModel.openHermes() } },
@@ -126,9 +194,58 @@ struct HermesSessionListView: View {
                 chat = HermesSessionChat(server: entry.server, connection: entry.connection, target: target)
             },
             toggleUnread: { viewModel.toggleUnread($0) },
-            togglePinned: { _ in }, archive: { _ in }, delete: { _ in }, rename: { _ in }, duplicate: { _ in },
-            move: { _, _ in }, createProject: { _ in }, refreshProjects: {}, export: { _, _ in }
+            togglePinned: { session in Task { await togglePinned(session) } },
+            archive: { session in Task { await archive(session) } },
+            delete: { deleting = $0 },
+            rename: { session in
+                viewModel.clearRenameError()
+                renaming = session
+            },
+            duplicate: { _ in }, move: { _, _ in }, createProject: { _ in }, refreshProjects: {},
+            export: { session, format in
+                Task { if let url = await viewModel.export(session, format: format) { exported = SessionExportShareItem(fileURL: url) } }
+            }
         )
+    }
+
+    private var mutationAnimation: Animation? { SessionListMotion.sessionMutationAnimation(reduceMotion: reduceMotion) }
+
+    private func togglePinned(_ session: SessionSummary) async {
+        if await viewModel.setPinned(session.pinned != true, for: session, animation: mutationAnimation) {
+            SessionHaptics.pinStateChanged(isEnabled: isHapticsEnabled)
+        }
+    }
+
+    /// "Archived · Undo" once the host confirms (#865); Undo restores the row in place.
+    private func archive(_ session: SessionSummary) async {
+        guard await viewModel.archive(session, animation: mutationAnimation) else { return }
+        SessionHaptics.archiveStateChanged(isEnabled: isHapticsEnabled)
+        let message = String(localized: "Archived")
+        actionToast.show(ActionToast(
+            message: message, systemImage: "archivebox",
+            accessibilityLabel: String.localizedStringWithFormat(String(localized: "%@, %@"),
+                                                                 SessionRowView.displayTitle(for: session), message),
+            actionTitle: String(localized: "Undo"),
+            action: {
+                Task {
+                    if await viewModel.unarchive(session, animation: mutationAnimation) {
+                        SessionHaptics.archiveStateChanged(isEnabled: isHapticsEnabled)
+                    }
+                }
+            }
+        ))
+    }
+
+    private func delete(_ session: SessionSummary) async {
+        if await viewModel.delete(session, animation: mutationAnimation) {
+            SessionHaptics.sessionDeleted(isEnabled: isHapticsEnabled)
+        }
+    }
+
+    private func rename(_ session: SessionSummary, to title: String) async -> Bool {
+        let renamed = await viewModel.rename(session, to: title)
+        if renamed, title != session.title { SessionHaptics.sessionRenamed(isEnabled: isHapticsEnabled) }
+        return renamed
     }
 }
 

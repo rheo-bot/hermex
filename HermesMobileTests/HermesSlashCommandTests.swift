@@ -55,6 +55,7 @@ import Observation
         XCTAssertEqual(slash.route("model"), .appOwned(SlashCommandCatalog.hermesCommand(named: "model")!))
         XCTAssertEqual(slash.route("reset"), .appOwned(SlashCommandCatalog.hermesCommand(named: "new")!), "an alias of /new")
         XCTAssertEqual(slash.route("yolo"), .appOwned(SlashCommandCatalog.hermesCommand(named: "yolo")!))
+        XCTAssertEqual(slash.route("title"), .appOwned(SlashCommandCatalog.command(named: "title")!), "#1048")
         XCTAssertEqual(slash.route("undo"), .held)
         XCTAssertEqual(slash.route("compact"), .held)
         XCTAssertEqual(slash.route("demo-skill").isSkill, true)
@@ -84,6 +85,33 @@ import Observation
         XCTAssertEqual(result, .unsupported(friendlyMessage: "Hermex can't run /undo in a Hermes chat yet (#702)."))
         XCTAssertEqual(chat.writes("slash.exec"), [])
         XCTAssertEqual(chat.writes("prompt.submit"), [])
+    }
+
+    /// `/title` renames the session on its runtime (#1048), never through `slash.exec`, and the
+    /// header takes the title the host kept.
+    func testTitleRenamesTheSessionOnItsRuntime() async {
+        let chat = await openChat()
+        chat.host.always("session.title", .init(result: .object(["pending": .bool(false), "title": .string("Launch plan")])))
+
+        let result = await chat.model.runHermesSlashCommand("/title  Launch plan ")
+
+        XCTAssertEqual(result, .executed(message: "Title set to **Launch plan**."))
+        XCTAssertEqual(chat.writes("session.title"), [["session_id": .string("runtime"), "title": .string("Launch plan")]])
+        XCTAssertEqual(chat.writes("slash.exec"), [])
+        XCTAssertEqual(chat.model.displayTitle, "Launch plan")
+    }
+
+    /// A title the host refuses (4022: in use, or over 100 characters) shows its words and keeps
+    /// the draft.
+    func testATitleTheHostRefusesShowsItsMessage() async {
+        let chat = await openChat()
+        let refusal = "Title 'Plan' is already in use by session 20261007_003046_925526"
+        chat.host.always("session.title", .init(error: 4022, message: refusal))
+
+        let result = await chat.model.runHermesSlashCommand("/title Plan")
+
+        XCTAssertEqual(result, .notDelivered)
+        XCTAssertEqual(chat.model.sendErrorMessage, refusal)
     }
 
     func testAnUnknownNameIsSentAsText() async {

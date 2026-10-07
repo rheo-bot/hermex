@@ -112,6 +112,8 @@ struct HermesChatTranscript: Equatable {
     /// first turn after an attach is sure to get one, so a turn consumes it.
     @ObservationIgnored private var hostTurnStartedAt: Double?
     @ObservationIgnored private var hostRunning = false
+    /// The last title `session.info` reported, so a repeat leaves the header alone.
+    @ObservationIgnored private var infoTitle: String?
     /// How the running turn ended, from `message.complete`, until `session.info` says idle.
     @ObservationIgnored private var pendingEnding: TranscriptTurnRunOutcome.Ending?
     /// The turn began from a send's reply; its own `message.start` is still to come.
@@ -576,6 +578,11 @@ struct HermesChatTranscript: Equatable {
 
     private func applyInfo(_ info: BotJSON) {
         if let model = info["model"].text, !model.isEmpty { delegate?.hermesApplyModel(model) }
+        // A rename on this runtime (`/title`, #1048) reports the new title here.
+        if let title = info["title"].text, !title.isEmpty, title != infoTitle {
+            infoTitle = title
+            applyTitle(title)
+        }
         requests.applyBypass(info)
         settings.apply(info: info, idle: info["running"].flag.map { !$0 } ?? !hostRunning)
         guard let running = info["running"].flag else { return }

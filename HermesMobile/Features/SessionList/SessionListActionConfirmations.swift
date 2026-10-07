@@ -51,7 +51,11 @@ struct SessionActionConfirmations: ViewModifier {
                     }
                 }
             } message: {
-                Text("This removes the session from the Hermes server. Use this only on a session you no longer need.")
+                if sessionPendingDeletion?.hermes != nil {
+                    Text("This deletes the session and its messages from the Hermes host. It can't be undone.")
+                } else {
+                    Text("This removes the session from the Hermes server. Use this only on a session you no longer need.")
+                }
             }
             .alert(
                 "Delete Project?",

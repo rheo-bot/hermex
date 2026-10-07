@@ -85,13 +85,6 @@ import Observation
 
     // MARK: Rows
 
-    func testAHermesRowOffersOnlyItsReadMark() {
-        let row = HermesSessionRow(id: "a").summary(in: "default")
-        XCTAssertFalse(SessionRowActionPolicy.offersMutationActions(for: row))
-        XCTAssertFalse(SessionRowActionPolicy.offersExport(for: row))
-        XCTAssertTrue(SessionRowActionPolicy.offersExport(for: SessionSummary(sessionId: "webui")))
-    }
-
     /// The attachment-title rule (#1046 comment of 2026-10-05): a title or `preview` drops the
     /// reference lines a Hermex send appends, whole or cut off by the host, and falls back to
     /// the first attachment's name, or to nothing.
@@ -422,7 +415,7 @@ import Observation
 
     func currentProfile() async throws -> String { current }
 
-    func sessionPage(profile: String, offset: Int) async throws -> HermesSessionPage {
+    func sessionPage(profile: String, offset: Int, archived: Bool) async throws -> HermesSessionPage {
         pageReads.append((profile, offset))
         let reply = pages[profile]?[offset] ?? HermesSessionPage(rows: [])
         if holdsPages { await withCheckedContinuation { held.append($0) } }
@@ -432,10 +425,12 @@ import Observation
         return reply
     }
 
-    func setSessionUnread(_ unread: Bool, key: String, profile: String) async throws {
+    func updateSession(_ change: HermesSessionChange, key: String, profile: String) async throws -> String? {
+        guard case .unread(let unread) = change else { throw BotFailure.unsupported }
         unreadWrites.append(UnreadWrite(key: key, profile: profile, unread: unread))
         if holdsUnread { await withCheckedContinuation { held.append($0) } }
         if unreadFails { throw BotFailure.rejected(500) }
+        return nil
     }
 
     func release() {

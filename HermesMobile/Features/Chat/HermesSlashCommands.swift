@@ -213,6 +213,13 @@ struct HermesSlashCompletion: Equatable {
         return parsed
     }
 
+    /// `/title` (#1048): renames the session on its runtime and returns the title the host
+    /// kept. A title in use or too long throws the host's message as `BotSettingFailure`.
+    func rename(_ title: String) async throws -> String {
+        let reply = try await write { .sessionRename(runtime: $0, title: title) }
+        return reply["title"].text.flatMap { $0.isEmpty ? nil : $0 } ?? title
+    }
+
     /// Expands `skill` with `argument` into the prompt to send.
     func expand(_ skill: SkillSlashSuggestion, argument: String, typed: String) async throws -> HermesSlashReply {
         let reply = try await write { .commandDispatch(name: skill.name, argument: argument, sessionID: $0) }

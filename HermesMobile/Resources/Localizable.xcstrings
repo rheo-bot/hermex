@@ -15376,6 +15376,113 @@
     "Bored" : { "localizations" : { "de" : { "stringUnit" : { "state" : "needs_review", "value" : "Gelangweilt" } }, "es" : { "stringUnit" : { "state" : "needs_review", "value" : "Aburrido" } }, "fr" : { "stringUnit" : { "state" : "needs_review", "value" : "Blasé" } }, "it" : { "stringUnit" : { "state" : "needs_review", "value" : "Annoiato" } }, "pl" : { "stringUnit" : { "state" : "needs_review", "value" : "Znudzony" } }, "pt-BR" : { "stringUnit" : { "state" : "needs_review", "value" : "Entediado" } }, "nl" : { "stringUnit" : { "state" : "needs_review", "value" : "Verveeld" } }, "tr" : { "stringUnit" : { "state" : "needs_review", "value" : "Sıkılmış" } }, "ru" : { "stringUnit" : { "state" : "needs_review", "value" : "Скучающее" } }, "ja" : { "stringUnit" : { "state" : "needs_review", "value" : "退屈" } }, "zh-Hans" : { "stringUnit" : { "state" : "needs_review", "value" : "无聊" } }, "ko" : { "stringUnit" : { "state" : "needs_review", "value" : "지루함" } }, "ar" : { "stringUnit" : { "state" : "needs_review", "value" : "ضجر" } }, "he" : { "stringUnit" : { "state" : "needs_review", "value" : "משועמם" } }, "ur" : { "stringUnit" : { "state" : "needs_review", "value" : "اکتایا ہوا" } }, "zh-Hant" : { "stringUnit" : { "state" : "needs_review", "value" : "無聊" } }, "zh-HK" : { "stringUnit" : { "state" : "needs_review", "value" : "悶" } } } },
     "Bot" : {"localizations":{"de":{"stringUnit":{"state":"needs_review","value":"Bot"}},"es":{"stringUnit":{"state":"needs_review","value":"Bot"}},"fr":{"stringUnit":{"state":"needs_review","value":"Bot"}},"it":{"stringUnit":{"state":"needs_review","value":"Bot"}},"pl":{"stringUnit":{"state":"needs_review","value":"Bot"}},"pt-BR":{"stringUnit":{"state":"needs_review","value":"Bot"}},"nl":{"stringUnit":{"state":"needs_review","value":"Bot"}},"tr":{"stringUnit":{"state":"needs_review","value":"Bot"}},"ru":{"stringUnit":{"state":"needs_review","value":"Бот"}},"ja":{"stringUnit":{"state":"needs_review","value":"ボット"}},"zh-Hans":{"stringUnit":{"state":"needs_review","value":"机器人"}},"ko":{"stringUnit":{"state":"needs_review","value":"봇"}},"ar":{"stringUnit":{"state":"needs_review","value":"روبوت"}},"he":{"stringUnit":{"state":"needs_review","value":"בוט"}},"ur":{"stringUnit":{"state":"needs_review","value":"بوٹ"}},"zh-Hant":{"stringUnit":{"state":"needs_review","value":"機器人"}},"zh-HK":{"stringUnit":{"state":"needs_review","value":"機械人"}}}},
     "Bot Chat" : { "localizations" : { "de" : { "stringUnit" : { "state" : "needs_review", "value" : "Bot-Chat" } }, "es" : { "stringUnit" : { "state" : "needs_review", "value" : "Chat del bot" } }, "fr" : { "stringUnit" : { "state" : "needs_review", "value" : "Discussion du bot" } }, "it" : { "stringUnit" : { "state" : "needs_review", "value" : "Chat del bot" } }, "pl" : { "stringUnit" : { "state" : "needs_review", "value" : "Czat bota" } }, "pt-BR" : { "stringUnit" : { "state" : "needs_review", "value" : "Chat do bot" } }, "nl" : { "stringUnit" : { "state" : "needs_review", "value" : "Botchat" } }, "tr" : { "stringUnit" : { "state" : "needs_review", "value" : "Bot sohbeti" } }, "ru" : { "stringUnit" : { "state" : "needs_review", "value" : "Чат бота" } }, "ja" : { "stringUnit" : { "state" : "needs_review", "value" : "ボットチャット" } }, "zh-Hans" : { "stringUnit" : { "state" : "needs_review", "value" : "机器人聊天" } }, "ko" : { "stringUnit" : { "state" : "needs_review", "value" : "봇 채팅" } }, "ar" : { "stringUnit" : { "state" : "needs_review", "value" : "دردشة البوت" } }, "he" : { "stringUnit" : { "state" : "needs_review", "value" : "צ׳אט הבוט" } }, "ur" : { "stringUnit" : { "state" : "needs_review", "value" : "بوٹ چیٹ" } }, "zh-Hant" : { "stringUnit" : { "state" : "needs_review", "value" : "機器人聊天" } }, "zh-HK" : { "stringUnit" : { "state" : "needs_review", "value" : "機器人聊天" } } } },
+    "Bot Chat · %@" : {
+      "comment" : "An archived Bot Chat's row title; %@ is its bot's Profile name.",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "دردشة البوت · %@"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bot-Chat · %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chat del bot · %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Discussion du bot · %@"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "צ׳אט הבוט · %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chat del bot · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "ボットチャット · %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "봇 채팅 · %@"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Botchat · %@"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Czat bota · %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Chat do bot · %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Чат бота · %@"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bot sohbeti · %@"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "بوٹ چیٹ · %@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "機器人聊天 · %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "机器人聊天 · %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "機器人聊天 · %@"
+          }
+        }
+      }
+    },
     "Bot Mode (beta)" : { "localizations" : { "de" : { "stringUnit" : { "state" : "needs_review", "value" : "Bot-Modus (Beta)" } }, "es" : { "stringUnit" : { "state" : "needs_review", "value" : "Modo Bot (beta)" } }, "fr" : { "stringUnit" : { "state" : "needs_review", "value" : "Mode Bot (bêta)" } }, "it" : { "stringUnit" : { "state" : "needs_review", "value" : "Modalità Bot (beta)" } }, "pl" : { "stringUnit" : { "state" : "needs_review", "value" : "Tryb botów (beta)" } }, "pt-BR" : { "stringUnit" : { "state" : "needs_review", "value" : "Modo Bot (beta)" } }, "nl" : { "stringUnit" : { "state" : "needs_review", "value" : "Botmodus (bèta)" } }, "tr" : { "stringUnit" : { "state" : "needs_review", "value" : "Bot Modu (beta)" } }, "ru" : { "stringUnit" : { "state" : "needs_review", "value" : "Режим ботов (бета)" } }, "ja" : { "stringUnit" : { "state" : "needs_review", "value" : "ボットモード（ベータ）" } }, "zh-Hans" : { "stringUnit" : { "state" : "needs_review", "value" : "机器人模式（测试版）" } }, "ko" : { "stringUnit" : { "state" : "needs_review", "value" : "봇 모드(베타)" } }, "ar" : { "stringUnit" : { "state" : "needs_review", "value" : "وضع الروبوتات (تجريبي)" } }, "he" : { "stringUnit" : { "state" : "needs_review", "value" : "מצב בוטים (בטא)" } }, "ur" : { "stringUnit" : { "state" : "needs_review", "value" : "بوٹ موڈ (بیٹا)" } }, "zh-Hant" : { "stringUnit" : { "state" : "needs_review", "value" : "機器人模式（測試版）" } }, "zh-HK" : { "stringUnit" : { "state" : "needs_review", "value" : "機械人模式（測試版）" } } } },
     "Bot Mode is unfinished. It adds a Bots row to the main screen for your direct Hermes bots. Each server’s Hermes connection is available with it off." : {"localizations":{"de":{"stringUnit":{"state":"needs_review","value":"Bot-Modus ist unfertig. Er fügt dem Hauptbildschirm eine Bots-Zeile für deine direkten Hermes-Bots hinzu. Die Hermes-Verbindung jedes Servers ist auch ohne ihn verfügbar."}},"es":{"stringUnit":{"state":"needs_review","value":"El modo Bot está inacabado. Añade una fila Bots a la pantalla principal para tus bots de Hermes directos. La conexión Hermes de cada servidor está disponible con él desactivado."}},"fr":{"stringUnit":{"state":"needs_review","value":"Le mode Bot est inachevé. Il ajoute une ligne Bots à l’écran principal pour vos bots Hermes directs. La connexion Hermes de chaque serveur reste disponible lorsqu’il est désactivé."}},"it":{"stringUnit":{"state":"needs_review","value":"La modalità Bot è incompleta. Aggiunge una riga Bot alla schermata principale per i tuoi bot Hermes diretti. La connessione Hermes di ogni server è disponibile anche se disattivata."}},"pl":{"stringUnit":{"state":"needs_review","value":"Tryb botów jest niedokończony. Dodaje wiersz Boty na ekranie głównym dla Twoich bezpośrednich botów Hermes. Połączenie Hermes każdego serwera jest dostępne także po wyłączeniu."}},"pt-BR":{"stringUnit":{"state":"needs_review","value":"O modo Bot está inacabado. Ele adiciona uma linha Bots à tela principal para seus bots Hermes diretos. A conexão Hermes de cada servidor fica disponível com ele desativado."}},"nl":{"stringUnit":{"state":"needs_review","value":"Botmodus is onaf. Het voegt een rij Bots toe aan het hoofdscherm voor je directe Hermes-bots. De Hermes-verbinding van elke server is beschikbaar terwijl het uit staat."}},"tr":{"stringUnit":{"state":"needs_review","value":"Bot Modu tamamlanmadı. Doğrudan Hermes botlarınız için ana ekrana bir Botlar satırı ekler. Her sunucunun Hermes bağlantısı kapalıyken de kullanılabilir."}},"ru":{"stringUnit":{"state":"needs_review","value":"Режим ботов не завершён. Он добавляет строку «Боты» на главный экран для ваших прямых ботов Hermes. Подключение Hermes каждого сервера доступно и при выключенном режиме."}},"ja":{"stringUnit":{"state":"needs_review","value":"ボットモードは未完成です。直接接続の Hermes ボット向けに、メイン画面に「ボット」行を追加します。各サーバーの Hermes 接続はオフでも利用できます。"}},"zh-Hans":{"stringUnit":{"state":"needs_review","value":"机器人模式尚未完成。它会在主屏幕添加一个“机器人”行，用于你的直连 Hermes 机器人。关闭时每个服务器的 Hermes 连接仍可使用。"}},"ko":{"stringUnit":{"state":"needs_review","value":"봇 모드는 미완성입니다. 직접 연결된 Hermes 봇을 위해 메인 화면에 봇 행을 추가합니다. 꺼져 있어도 각 서버의 Hermes 연결은 사용할 수 있습니다."}},"ar":{"stringUnit":{"state":"needs_review","value":"وضع الروبوتات غير مكتمل. يضيف صف «الروبوتات» إلى الشاشة الرئيسية لروبوتات Hermes المباشرة. يبقى اتصال Hermes لكل خادم متاحًا عند إيقافه."}},"he":{"stringUnit":{"state":"needs_review","value":"מצב בוטים אינו גמור. הוא מוסיף שורת בוטים למסך הראשי עבור בוטי Hermes הישירים שלך. חיבור Hermes של כל שרת זמין גם כשהוא כבוי."}},"ur":{"stringUnit":{"state":"needs_review","value":"بوٹ موڈ نامکمل ہے۔ یہ آپ کے براہِ راست Hermes بوٹس کے لیے مرکزی اسکرین پر ایک بوٹس قطار شامل کرتا ہے۔ ہر سرور کا Hermes کنکشن اس کے بند ہونے پر بھی دستیاب ہے۔"}},"zh-Hant":{"stringUnit":{"state":"needs_review","value":"機器人模式尚未完成。它會在主畫面加入「機器人」列，用於你的直連 Hermes 機器人。關閉時每個伺服器的 Hermes 連線仍可使用。"}},"zh-HK":{"stringUnit":{"state":"needs_review","value":"機械人模式尚未完成。它會在主畫面加入「機械人」列，用於你的直連 Hermes 機械人。關閉時每個伺服器的 Hermes 連線仍可使用。"}}}},
     "Bot connection" : { "localizations" : { "de" : { "stringUnit" : { "state" : "needs_review", "value" : "Bot-Verbindung" } }, "es" : { "stringUnit" : { "state" : "needs_review", "value" : "Conexión de Bot" } }, "fr" : { "stringUnit" : { "state" : "needs_review", "value" : "Connexion Bot" } }, "it" : { "stringUnit" : { "state" : "needs_review", "value" : "Connessione Bot" } }, "pl" : { "stringUnit" : { "state" : "needs_review", "value" : "Połączenie z botami" } }, "pt-BR" : { "stringUnit" : { "state" : "needs_review", "value" : "Conexão do Bot" } }, "nl" : { "stringUnit" : { "state" : "needs_review", "value" : "Botverbinding" } }, "tr" : { "stringUnit" : { "state" : "needs_review", "value" : "Bot bağlantısı" } }, "ru" : { "stringUnit" : { "state" : "needs_review", "value" : "Подключение ботов" } }, "ja" : { "stringUnit" : { "state" : "needs_review", "value" : "ボット接続" } }, "zh-Hans" : { "stringUnit" : { "state" : "needs_review", "value" : "机器人连接" } }, "ko" : { "stringUnit" : { "state" : "needs_review", "value" : "봇 연결" } }, "ar" : { "stringUnit" : { "state" : "needs_review", "value" : "اتصال الروبوتات" } }, "he" : { "stringUnit" : { "state" : "needs_review", "value" : "חיבור בוטים" } }, "ur" : { "stringUnit" : { "state" : "needs_review", "value" : "بوٹ کنکشن" } }, "zh-Hant" : { "stringUnit" : { "state" : "needs_review", "value" : "機器人連線" } }, "zh-HK" : { "stringUnit" : { "state" : "needs_review", "value" : "機械人連線" } } } },
@@ -115790,6 +115897,112 @@
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "This Card no longer exists on this Board. The Board has been refreshed." } }
       }
     },
+    "This deletes the session and its messages from the Hermes host. It can't be undone." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "يحذف هذا الجلسة ورسائلها من مضيف Hermes. لا يمكن التراجع عن ذلك."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Dadurch werden die Sitzung und ihre Nachrichten vom Hermes-Host gelöscht. Das kann nicht rückgängig gemacht werden."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Esto elimina la sesión y sus mensajes del host de Hermes. No se puede deshacer."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cette action supprime la session et ses messages de l’hôte Hermes. Elle est irréversible."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "פעולה זו מוחקת את המפגש ואת ההודעות שלו ממארח Hermes. לא ניתן לבטל אותה."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "La sessione e i suoi messaggi vengono eliminati dall’host Hermes. Non è possibile annullare."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hermes ホストからこのセッションとそのメッセージが削除されます。この操作は取り消せません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hermes 호스트에서 이 세션과 메시지가 삭제됩니다. 이 작업은 실행 취소할 수 없습니다."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Hiermee worden de sessie en de berichten ervan van de Hermes-host verwijderd. Dit kan niet ongedaan worden gemaakt."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Spowoduje to usunięcie sesji i jej wiadomości z hosta Hermes. Tej operacji nie można cofnąć."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Isso apaga a sessão e as mensagens dela do host do Hermes. Não é possível desfazer."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Сессия и её сообщения будут удалены с хоста Hermes. Это действие нельзя отменить."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bu işlem, oturumu ve mesajlarını Hermes ana makinesinden siler. Geri alınamaz."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "یہ Hermes ہوسٹ سے سیشن اور اس کے پیغامات حذف کر دیتا ہے۔ اسے واپس نہیں کیا جا سکتا۔"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "這將從 Hermes 主機刪除此工作階段及其訊息。此操作無法復原。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "这将从 Hermes 主机删除此会话及其消息。此操作无法撤销。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "這將從 Hermes 主機刪除此工作階段及其訊息。此操作無法復原。"
+          }
+        }
+      }
+    },
     "This Hermes connection does not support Bot chat here." : { "localizations" : { "de" : { "stringUnit" : { "state" : "needs_review", "value" : "Diese Hermes-Verbindung unterstützt hier keinen Bot-Chat." } }, "es" : { "stringUnit" : { "state" : "needs_review", "value" : "Esta conexión de Hermes no admite aquí el chat con bots." } }, "fr" : { "stringUnit" : { "state" : "needs_review", "value" : "Cette connexion Hermes ne prend pas en charge les discussions avec des bots ici." } }, "it" : { "stringUnit" : { "state" : "needs_review", "value" : "Questa connessione Hermes non supporta qui la chat Bot." } }, "pl" : { "stringUnit" : { "state" : "needs_review", "value" : "To połączenie Hermes nie obsługuje tutaj czatu z botami." } }, "pt-BR" : { "stringUnit" : { "state" : "needs_review", "value" : "Esta conexão do Hermes não oferece suporte ao chat de Bot aqui." } }, "nl" : { "stringUnit" : { "state" : "needs_review", "value" : "Deze Hermes-verbinding ondersteunt hier geen botchat." } }, "tr" : { "stringUnit" : { "state" : "needs_review", "value" : "Bu Hermes bağlantısı burada Bot sohbetini desteklemiyor." } }, "ru" : { "stringUnit" : { "state" : "needs_review", "value" : "Это подключение Hermes не поддерживает здесь чат с ботами." } }, "ja" : { "stringUnit" : { "state" : "needs_review", "value" : "このHermes接続では、ここでのボットチャットに対応していません。" } }, "zh-Hans" : { "stringUnit" : { "state" : "needs_review", "value" : "此 Hermes 连接不支持在此处进行机器人聊天。" } }, "ko" : { "stringUnit" : { "state" : "needs_review", "value" : "이 Hermes 연결은 여기에서 봇 채팅을 지원하지 않습니다." } }, "ar" : { "stringUnit" : { "state" : "needs_review", "value" : "لا يدعم اتصال Hermes هذا دردشة الروبوتات هنا." } }, "he" : { "stringUnit" : { "state" : "needs_review", "value" : "חיבור Hermes זה אינו תומך כאן בצ׳אט בוטים." } }, "ur" : { "stringUnit" : { "state" : "needs_review", "value" : "یہ Hermes کنکشن یہاں بوٹ چیٹ کو سپورٹ نہیں کرتا۔" } }, "zh-Hant" : { "stringUnit" : { "state" : "needs_review", "value" : "此 Hermes 連線不支援在此進行機器人聊天。" } }, "zh-HK" : { "stringUnit" : { "state" : "needs_review", "value" : "此 Hermes 連線不支援在此進行機械人聊天。" } } } },
     "This Hermes connection no longer owns these workers. Reconnect to inspect them." : {"localizations":{"de":{"stringUnit":{"state":"needs_review","value":"Diese Hermes-Verbindung besitzt diese Worker nicht mehr. Stelle die Verbindung erneut her, um sie zu prüfen."}},"es":{"stringUnit":{"state":"needs_review","value":"Esta conexión de Hermes ya no controla estos workers. Vuelve a conectarte para inspeccionarlos."}},"fr":{"stringUnit":{"state":"needs_review","value":"Cette connexion Hermes ne contrôle plus ces workers. Reconnectez-vous pour les inspecter."}},"it":{"stringUnit":{"state":"needs_review","value":"Questa connessione Hermes non controlla più questi worker. Riconnettiti per ispezionarli."}},"pl":{"stringUnit":{"state":"needs_review","value":"To połączenie Hermes nie kontroluje już tych procesów roboczych. Połącz się ponownie, aby je sprawdzić."}},"pt-BR":{"stringUnit":{"state":"needs_review","value":"Esta conexão do Hermes não controla mais estes workers. Reconecte para inspecioná-los."}},"nl":{"stringUnit":{"state":"needs_review","value":"Deze Hermes-verbinding beheert deze workers niet meer. Maak opnieuw verbinding om ze te bekijken."}},"tr":{"stringUnit":{"state":"needs_review","value":"Bu Hermes bağlantısı artık bu worker'ları yönetmiyor. İncelemek için yeniden bağlanın."}},"ru":{"stringUnit":{"state":"needs_review","value":"Это подключение Hermes больше не управляет этими воркерами. Переподключитесь, чтобы проверить их."}},"ja":{"stringUnit":{"state":"needs_review","value":"この Hermes 接続はこれらのワーカーを管理していません。確認するには再接続してください。"}},"zh-Hans":{"stringUnit":{"state":"needs_review","value":"此 Hermes 连接已不再拥有这些工作进程。请重新连接以检查它们。"}},"ko":{"stringUnit":{"state":"needs_review","value":"이 Hermes 연결은 더 이상 이 워커를 관리하지 않습니다. 확인하려면 다시 연결하세요."}},"ar":{"stringUnit":{"state":"needs_review","value":"لم يعد اتصال Hermes هذا يملك هذه العمليات العاملة. أعد الاتصال لفحصها."}},"he":{"stringUnit":{"state":"needs_review","value":"חיבור Hermes זה כבר אינו שולט בתהליכי העבודה האלה. יש להתחבר מחדש כדי לבדוק אותם."}},"ur":{"stringUnit":{"state":"needs_review","value":"یہ Hermes کنکشن اب ان ورکرز کا مالک نہیں ہے۔ ان کا جائزہ لینے کے لیے دوبارہ جڑیں۔"}},"zh-Hant":{"stringUnit":{"state":"needs_review","value":"此 Hermes 連線已不再擁有這些工作程序。請重新連線以檢查它們。"}},"zh-HK":{"stringUnit":{"state":"needs_review","value":"此 Hermes 連線已不再擁有這些工作程序。請重新連線以檢查它們。"}}}},
     "This Hermes host approves every command itself, so approvals can't be turned back on from here." : {
@@ -116037,6 +116250,218 @@
       "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此預覽已過時。請重新執行預覽調度後再據此操作。" } },
       "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "此預覽已過時。請重新執行預覽調度後再據此操作。" } }
     } },
+    "This session is still replying here. Stop the reply first, then delete it." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "لا تزال هذه الجلسة ترد هنا. أوقف الرد أولاً، ثم احذفها."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diese Sitzung antwortet hier noch. Stoppe zuerst die Antwort und lösche sie dann."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Esta sesión todavía está respondiendo aquí. Detén primero la respuesta y luego elimínala."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cette session est encore en train de répondre ici. Arrêtez d’abord la réponse, puis supprimez-la."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "המפגש הזה עדיין משיב כאן. עצרו קודם את התשובה ואז מחקו אותו."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Questa sessione sta ancora rispondendo qui. Interrompi prima la risposta, poi eliminala."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このセッションはまだここで応答中です。先に応答を停止してから削除してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "이 세션은 아직 여기에서 응답 중입니다. 먼저 응답을 중지한 다음 삭제하세요."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deze sessie antwoordt hier nog. Stop eerst het antwoord en verwijder de sessie daarna."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ta sesja wciąż tu odpowiada. Najpierw zatrzymaj odpowiedź, a potem ją usuń."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Esta sessão ainda está respondendo aqui. Pare a resposta primeiro e depois exclua-a."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Эта сессия ещё отвечает здесь. Сначала остановите ответ, затем удалите её."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bu oturum burada hâlâ yanıt veriyor. Önce yanıtı durdurun, sonra silin."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "یہ سیشن ابھی یہاں جواب دے رہا ہے۔ پہلے جواب روکیں، پھر اسے حذف کریں۔"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此工作階段仍在這裡回覆。請先停止回覆，再刪除它。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此会话仍在此处回复。请先停止回复，再删除它。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此工作階段仍在這裡回覆。請先停止回覆，再刪除它。"
+          }
+        }
+      }
+    },
+    "This session is open in another app, so nothing was deleted. Close it there, then try again." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "هذه الجلسة مفتوحة في تطبيق آخر، لذا لم يُحذف أي شيء. أغلقها هناك، ثم حاول مرة أخرى."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Diese Sitzung ist in einer anderen App geöffnet, daher wurde nichts gelöscht. Schließe sie dort und versuche es dann erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Esta sesión está abierta en otra app, así que no se eliminó nada. Ciérrala allí y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Cette session est ouverte dans une autre app, donc rien n’a été supprimé. Fermez-la là-bas, puis réessayez."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "המפגש הזה פתוח באפליקציה אחרת, ולכן שום דבר לא נמחק. סגרו אותו שם ונסו שוב."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Questa sessione è aperta in un’altra app, quindi non è stato eliminato nulla. Chiudila lì e riprova."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "このセッションは別のアプリで開かれているため、何も削除されませんでした。そちらで閉じてから、もう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "이 세션이 다른 앱에서 열려 있어 아무것도 삭제되지 않았습니다. 그곳에서 닫은 다음 다시 시도하세요."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Deze sessie is geopend in een andere app, dus er is niets verwijderd. Sluit de sessie daar en probeer het opnieuw."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Ta sesja jest otwarta w innej aplikacji, więc nic nie zostało usunięte. Zamknij ją tam i spróbuj ponownie."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Esta sessão está aberta em outro app, então nada foi excluído. Feche-a lá e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Эта сессия открыта в другом приложении, поэтому ничего не удалено. Закройте её там и повторите попытку."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "Bu oturum başka bir uygulamada açık, bu yüzden hiçbir şey silinmedi. Orada kapatın, sonra yeniden deneyin."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "یہ سیشن کسی دوسری ایپ میں کھلا ہے، اس لیے کچھ حذف نہیں ہوا۔ اسے وہاں بند کریں، پھر دوبارہ کوشش کریں۔"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此工作階段已在另一個 App 中開啟，因此沒有刪除任何內容。請在那裡關閉它，然後再試一次。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此会话已在另一个 App 中打开，因此未删除任何内容。请在那里关闭它，然后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "needs_review",
+            "value" : "此工作階段已在另一個 App 中開啟，因此沒有刪除任何內容。請在那裡關閉它，然後再試一次。"
+          }
+        }
+      }
+    },
     "This Week" : {
       "localizations" : {
         "ar" : {

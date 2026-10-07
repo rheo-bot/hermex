@@ -458,4 +458,86 @@ final class APIClientSessionMutationTests: APIClientTestCase {
         XCTAssertEqual(response.session?.messages?.count, 3)
         XCTAssertEqual(response.session?.messagesOffset, 0)
     }
+
+    // MARK: Hermes (#1048)
+
+    /// Each change PATCHes one field of that session, with its Profile in the body, as the
+    /// host's `SessionRename` takes it.
+    @MainActor
+    func testHermesSessionChangesPatchOneFieldWithTheProfileInTheBody() async throws {
+        var patches: [(path: String, body: BotJSON)] = []
+        let client = try await hermesClient { request in
+            guard request.httpMethod == "PATCH", let path = request.url?.path else { return nil }
+            patches.append((path, Self.hermesBody(request)))
+            return .json(200, .object(["ok": .bool(true), "title": .string("Plan the launch")]))
+        }
+
+        try await client.updateSession(.pinned(true), key: "20261005_101500_a1b2c3", profile: "research")
+        try await client.updateSession(.archived(false), key: "20261005_101500_a1b2c3", profile: "research")
+        let kept = try await client.updateSession(.title("Plan the launch"), key: "20261005_101500_a1b2c3", profile: "research")
+
+        XCTAssertEqual(kept, "Plan the launch")
+        XCTAssertEqual(patches.map(\.path), Array(repeating: "/api/sessions/20261005_101500_a1b2c3", count: 3))
+        XCTAssertEqual(patches.map(\.body), [
+            .object(["pinned": .bool(true), "profile": .string("research")]),
+            .object(["archived": .bool(false), "profile": .string("research")]),
+            .object(["title": .string("Plan the launch"), "profile": .string("research")])
+        ])
+    }
+
+    /// A title the host refuses comes back in its own words; any other refusal stays a status.
+    @MainActor
+    func testHermesRefusedTitleCarriesTheHostsMessage() async throws {
+        let detail = "Title too long (101 chars, max 100)"
+        var status = 400
+        let client = try await hermesClient { request in
+            request.httpMethod == "PATCH" ? .json(status, .object(["detail": .string(detail)])) : nil
+        }
+
+        do {
+            try await client.updateSession(.title(String(repeating: "x", count: 101)), key: "tip", profile: "default")
+            XCTFail("The host refused the title")
+        } catch {
+            XCTAssertEqual(error as? HermesSessionRefusal, HermesSessionRefusal(message: detail))
+        }
+        status = 404
+        do {
+            try await client.updateSession(.pinned(true), key: "tip", profile: "default")
+            XCTFail("The host has no such session")
+        } catch {
+            XCTAssertEqual(error as? BotFailure, .rejected(404))
+        }
+    }
+
+    /// Export reads that exact session under its Profile and hands back the host's bytes.
+    @MainActor
+    func testHermesExportReadsThatSessionUnderItsProfile() async throws {
+        let export = BotJSON.object(["id": .string("tip"), "system_prompt": .string("You are Hermes"), "messages": .array([])])
+        let client = try await hermesClient { request in
+            request.url?.path == "/api/sessions/tip/export" ? .json(200, export) : nil
+        }
+
+        let data = try await client.exportSession(key: "tip", profile: "research")
+
+        XCTAssertEqual(try JSONDecoder().decode(BotJSON.self, from: data), export)
+        let request = try XCTUnwrap(HermesHostFixture.requests.first { $0.url?.path == "/api/sessions/tip/export" })
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.query, "profile=research")
+    }
+
+    /// A connected client on a scripted host whose REST routes `answer` serves first.
+    @MainActor
+    private func hermesClient(_ answer: @escaping (URLRequest) -> HermesHostFixture.Reply?) async throws -> BotClient {
+        addTeardownBlock { HermesHostFixture.reset() }
+        let record = BotConnection(id: UUID(), name: "Mac", address: URL(string: "https://hermes.example")!,
+                                   username: "user", password: "secret")
+        let client = BotClient(http: BotSocketHost().connection(record))
+        _ = HermesHostFixture.configuration(answer)
+        try await client.connect()
+        return client
+    }
+
+    private static func hermesBody(_ request: URLRequest) -> BotJSON {
+        apiTestBodyData(from: request).flatMap { try? JSONDecoder().decode(BotJSON.self, from: $0) } ?? .null
+    }
 }

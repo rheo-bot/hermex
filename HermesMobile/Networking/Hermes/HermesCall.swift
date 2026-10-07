@@ -46,6 +46,16 @@ enum HermesCall: Equatable, Sendable {
     /// Mints a plain session under the Profile: no title, not hidden. The host writes no
     /// row until its first prompt (`ConversationTarget.new`).
     case sessionNew(profile: String)
+    /// `/title` in an open chat (#1048): renames the session `runtime` runs and emits
+    /// `session.info`. A title in use or over 100 characters is 4022 with the host's message.
+    case sessionRename(runtime: String, title: String)
+    /// Ends one runtime, for every client attached to it. Only a delete sends it, and only
+    /// for an idle runtime this phone attached (#1048).
+    case sessionClose(runtime: String)
+    /// Deletes that exact stored session and its messages under `profile` (#1048). The host
+    /// refuses with 4023 while a runtime in its process holds the session; REST `DELETE` has
+    /// no such check, so it is never used.
+    case sessionDelete(profile: String, storedKey: String)
 
     // Turns
     /// Always `queued`: even an idle Send can race Desktop, so a fresh send never
@@ -222,7 +232,9 @@ enum HermesCall: Equatable, Sendable {
         case .profilesCreate: return "profiles.create"
         case .sessionList: return "session.list"
         case .sessionCreate, .sessionNew: return "session.create"
-        case .sessionTitle: return "session.title"
+        case .sessionTitle, .sessionRename: return "session.title"
+        case .sessionClose: return "session.close"
+        case .sessionDelete: return "session.delete"
         case .sessionResume: return "session.resume"
         case .sessionEventsSince: return "session.events.since"
         case .sessionActiveList: return "session.active_list"
@@ -290,6 +302,9 @@ enum HermesCall: Equatable, Sendable {
                     "hidden": .bool(true), "follow_profile_config": .bool(true)]
         case .sessionNew(let profile), .sessionMostRecent(let profile): return ["profile": .string(profile)]
         case .sessionTitle(let sessionID): return ["session_id": .string(sessionID), "title": .string(Self.botChatTitle)]
+        case .sessionRename(let runtime, let title): return ["session_id": .string(runtime), "title": .string(title)]
+        case .sessionClose(let runtime): return ["session_id": .string(runtime)]
+        case .sessionDelete(let profile, let storedKey): return ["session_id": .string(storedKey), "profile": .string(profile)]
         case .sessionResume(let profile, let sessionID, let omitMessages):
             var params: [String: BotJSON] = ["profile": .string(profile), "session_id": .string(sessionID),
                                              "close_on_disconnect": .bool(false)]
@@ -409,8 +424,12 @@ enum HermesCall: Equatable, Sendable {
         case .profilesConfigure(let changes): valid = changes.isAdmissible
         case .profilesCreate(let profile): valid = profile.isAdmissible
         case .sessionCreate(let profile), .sessionNew(let profile), .sessionMostRecent(let profile): valid = !profile.isEmpty
-        case .sessionTitle(let sessionID), .commandsCatalog(let sessionID), .subagentList(let sessionID):
+        case .sessionTitle(let sessionID), .commandsCatalog(let sessionID), .subagentList(let sessionID),
+             .sessionClose(let sessionID):
             valid = !sessionID.isEmpty
+        case .sessionRename(let runtime, let title):
+            valid = !runtime.isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .sessionDelete(let profile, let storedKey): valid = !profile.isEmpty && !storedKey.isEmpty
         case .configSet(let sessionID, _, let setting):
             switch setting {
             case .model(let value, _): valid = !sessionID.isEmpty && value.hasSuffix(" --session")
