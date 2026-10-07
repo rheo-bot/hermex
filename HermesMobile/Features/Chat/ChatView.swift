@@ -302,6 +302,9 @@ struct ChatView: View {
     let onReplaceHermesSession: ((HermesSessionChat) -> Void)?
     /// A Hermes session's dictation goes to its host for its Profile (#1071).
     private let hermesTranscriber: ComposerTranscriber?
+    /// Returns to the Sessions list under this Hermes chat, searching the query `/sessions` or
+    /// `/resume` named (#1053). Nil pushes a list on top instead.
+    let onOpenHermesSessions: ((String) -> Void)?
 
     /// The composer's draft. Never read it in `body` or wrap it in a get/set
     /// binding for the composer: either re-runs this whole screen on every
@@ -331,6 +334,8 @@ struct ChatView: View {
     @State private var pushedSession: SessionSummary?
     /// A new Hermes chat in another Profile, pushed on top so Back returns here (#1015).
     @State private var pushedHermesSession: HermesSessionChat?
+    /// The Sessions list `/sessions` or `/resume` pushed when no list is under this chat (#1053).
+    @State private var pushedHermesSessionList: HermesSessionListEntry?
     /// Set when this chat is a fork; draws the "Forked from" row.
     @State private var forkOrigin: ForkOrigin?
     @State private var isOpeningForkParent = false
@@ -427,7 +432,8 @@ struct ChatView: View {
         restoresDraftSettings: Bool = false,
         onConversationStarted: @escaping () -> Void = {},
         hermesSession: HermesSessionChat? = nil,
-        onReplaceHermesSession: ((HermesSessionChat) -> Void)? = nil
+        onReplaceHermesSession: ((HermesSessionChat) -> Void)? = nil,
+        onOpenHermesSessions: ((String) -> Void)? = nil
     ) {
         self.session = session
         self.server = server
@@ -442,6 +448,7 @@ struct ChatView: View {
         isHermesSession = hermesSession != nil
         self.onReplaceHermesSession = onReplaceHermesSession
         hermesTranscriber = hermesSession.map { HermesTranscription.transcriber(for: $0) }
+        self.onOpenHermesSessions = onOpenHermesSessions
         _draftMessage = State(initialValue: initialDraft)
         _draftQuotes = State(initialValue: initialQuotes)
         _initialAttachments = State(initialValue: initialAttachments)
@@ -465,13 +472,15 @@ struct ChatView: View {
 
     /// A Hermes session on its Profile (#1010). It has no webui session, so nothing here
     /// reaches the webui API; connection errors show in the chat itself.
-    init(hermesSession: HermesSessionChat, onReplace: ((HermesSessionChat) -> Void)? = nil) {
+    init(hermesSession: HermesSessionChat, onReplace: ((HermesSessionChat) -> Void)? = nil,
+         onOpenSessions: ((String) -> Void)? = nil) {
         self.init(
             session: SessionSummary(profile: hermesSession.target.profile),
             server: hermesSession.server,
             onAPIError: { _ in },
             hermesSession: hermesSession,
-            onReplaceHermesSession: onReplace
+            onReplaceHermesSession: onReplace,
+            onOpenHermesSessions: onOpenSessions
         )
     }
 
@@ -1033,7 +1042,11 @@ struct ChatView: View {
                 ChatView(session: session, server: server, onAPIError: onAPIError)
             }
             .navigationDestination(item: $pushedHermesSession) { chat in
-                ChatView(hermesSession: chat) { pushedHermesSession = $0 }.id(chat.id)
+                ChatView(hermesSession: chat, onReplace: { pushedHermesSession = $0 }, onOpenSessions: onOpenHermesSessions)
+                    .id(chat.id)
+            }
+            .navigationDestination(item: $pushedHermesSessionList) { entry in
+                HermesSessionListView(entry: entry).id(entry.id)
             }
             .sheet(item: $attachmentPreviewItem) { item in
                 ChatAttachmentPreviewView(
@@ -2527,6 +2540,14 @@ struct ChatView: View {
                 )
             }
             if let onReplaceHermesSession { onReplaceHermesSession(chat) } else { pushedHermesSession = chat }
+        case .openedHermesSessionList(let entry):
+            if consumesDraft {
+                reconcileConsumedDraft(
+                    ComposerDraftContent(text: submittedDraft, quotes: submittedQuotes),
+                    submittedDraftRevision: submittedDraftRevision
+                )
+            }
+            if let onOpenHermesSessions { onOpenHermesSessions(entry.query) } else { pushedHermesSessionList = entry }
         case .prefill(let text):
             // Unless the user typed on meanwhile: their edit wins.
             if draftRevision == submittedDraftRevision {
@@ -3893,7 +3914,7 @@ private enum PastedFileError: LocalizedError {
 private extension SlashCommandExecutionResult {
     var isSuccessfulSubmission: Bool {
         switch self {
-        case .executed, .openedSession, .openedHermesSession, .replacedHermesSession:
+        case .executed, .openedSession, .openedHermesSession, .replacedHermesSession, .openedHermesSessionList:
             true
         case .sendAsMessage, .unsupported, .needsSubArg, .notDelivered, .prefill:
             false

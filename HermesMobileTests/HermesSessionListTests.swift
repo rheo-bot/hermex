@@ -369,9 +369,219 @@ import Observation
     }
 }
 
+/// A Hermes server's Sessions list search (#1053): the host's matches merged into the loaded
+/// rows, their snippets, labels and Bot Chat routing, on the scripted wire below.
+@MainActor final class HermesSessionSearchTests: XCTestCase {
+    private let server = URL(string: "https://hermes.example")!
+    private let connection = BotConnection(id: UUID(), name: "Mac", address: URL(string: "https://hermes.example")!,
+                                           username: "user", password: "secret")
+    private var defaults: UserDefaults!
+    private var suite = ""
+
+    override func setUp() {
+        super.setUp()
+        suite = "HermesSessionSearchTests." + UUID().uuidString
+        defaults = UserDefaults(suiteName: suite)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suite)
+        super.tearDown()
+    }
+
+    /// Every parameter is sent: the Profile, a limit, and the sources the list leaves out, so a
+    /// search never finds a row the list never shows. A typed `+` stays a `+`.
+    func testTheSearchAsksForTheQueryInTheListedProfile() throws {
+        let request = try HermesREST.sessionSearch(query: "c++ nimb", profile: "research")
+            .request(base: URL(string: "https://hermes.example/base")!)
+
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.path, "/base/api/sessions/search")
+        XCTAssertEqual(request.url?.query, "q=c%2B%2B%20nimb&profile=research&limit=50&exclude_sources=cron,kanban,oneshot,subagent,tool")
+        XCTAssertThrowsError(try HermesREST.sessionSearch(query: "", profile: "research").request(base: server))
+        XCTAssertThrowsError(try HermesREST.sessionSearch(query: "nimb", profile: "").request(base: server))
+    }
+
+    /// The pin's shapes, as `scripts/local-hermes` answered them: a content match carries the
+    /// message's marked snippet, an id match only the preview, and a match without the
+    /// session's row has no `last_active`, so recency falls back to `session_started`. A result
+    /// without an id is skipped.
+    func testResultsReadAsRowsWithTheirSnippetsAndRecency() throws {
+        let reply = Data(#"""
+        {"results": [
+          {"snippet": "Plan the >>>Nimbus<<< cloud migration", "role": "user", "source": "cli", "model": "hermex-stub",
+           "session_started": 1791400926.3, "last_active": 1791400927.2, "session_id": "tip", "lineage_root": "root",
+           "profile": "default", "id": "tip", "title": null, "started_at": 1791400926.3, "message_count": 4,
+           "preview": "Plan the Nimbus cloud migration", "parent_session_id": null, "archived": false},
+          {"snippet": "Draft release notes", "role": null, "session_started": 1791400930.9, "last_active": 1791400931.6,
+           "session_id": "20261007_152208_588bfb", "lineage_root": "20261007_152208_588bfb", "profile": "default",
+           "title": "Release notes", "archived": true},
+          {"snippet": "the >>>nimbus<<< cluster", "role": "assistant", "session_started": 1791400900, "last_active": null,
+           "session_id": "orphan", "lineage_root": "orphan", "profile": "default"},
+          {"snippet": "no id", "role": "user"}
+        ]}
+        """#.utf8)
+
+        let results = try JSONDecoder().decode(HermesSessionSearch.self, from: reply).results
+
+        XCTAssertEqual(results.map(\.row.id), ["tip", "20261007_152208_588bfb", "orphan"])
+        XCTAssertEqual(results.map(\.row.identity), ["root", "20261007_152208_588bfb", "orphan"])
+        XCTAssertEqual(results.map(\.snippet), ["Plan the >>>Nimbus<<< cloud migration", nil, "the >>>nimbus<<< cluster"])
+        XCTAssertEqual(results.map(\.row.lastActive), [1_791_400_927.2, 1_791_400_931.6, 1_791_400_900])
+        XCTAssertEqual(results.map(\.row.archived), [false, true, nil])
+        XCTAssertEqual(results[0].row.preview, "Plan the Nimbus cloud migration")
+        XCTAssertEqual(results[0].row.messageCount, 4)
+    }
+
+    /// The loaded rows filter at once; the host's matches follow in its order, each merged by
+    /// identity (a compression lineage's root): a loaded row shows as listed, pin and read mark
+    /// included, with the host's snippet, and one the pages lack shows from the result. A row
+    /// both found is listed once.
+    func testHostMatchesMergeByLineageRootWithTheLoadedRows() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: HermesSessionPage(rows: [
+            HermesSessionRow(id: "plan", title: "Nimbus plan", lastActive: 30),
+            HermesSessionRow(id: "tip", title: "Deploy notes", lastActive: 20, pinned: true, unread: true, lineageRootID: "root"),
+            HermesSessionRow(id: "lunch", title: "Lunch", lastActive: 10)
+        ])]
+        wire.searchResults = [
+            HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old chat", lastActive: 1, profile: "default",
+                                                            lineageRootID: "old"), snippet: "the >>>nimbus<<< cluster"),
+            HermesSessionSearchResult(row: HermesSessionRow(id: "tip", title: "Deploy notes", profile: "default", lineageRootID: "root"),
+                                      snippet: ">>>Nimbus<<< rollout"),
+            HermesSessionSearchResult(row: HermesSessionRow(id: "plan", title: "Nimbus plan", profile: "default", lineageRootID: "plan"))
+        ]
+        let list = makeList(wire)
+        await list.openHermes()
+
+        XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["plan"],
+                       "the loaded rows filter before the host answers")
+        await list.searchSessions(query: " Nimbus ", debounceNanoseconds: 0)
+
+        let shown = list.visibleSessions(searchText: "Nimbus", selectedProjectID: nil)
+        XCTAssertEqual(shown.compactMap(\.sessionId), ["plan", "old", "tip"])
+        XCTAssertEqual(wire.searches.map(\.query), ["nimbus"])
+        XCTAssertEqual(wire.searches.map(\.profile), ["default"])
+        let tip = shown[2]
+        XCTAssertEqual(tip.pinned, true)
+        XCTAssertTrue(list.isUnread(tip))
+        XCTAssertEqual(list.searchExcerpt(for: tip, searchText: "Nimbus")?.text, "Nimbus rollout")
+        XCTAssertEqual(list.searchExcerpt(for: shown[1], searchText: "Nimbus")?.text, "the nimbus cluster")
+        XCTAssertNil(list.searchExcerpt(for: shown[0], searchText: "Nimbus"), "an id or title match has no excerpt")
+        XCTAssertNil(list.searchExcerpt(for: tip, searchText: "rollout"), "another screen's query shows none")
+    }
+
+    /// An archived match is labeled "Archived" and opens as a session. A bot's Bot Chat is named
+    /// after its Profile and opens in that bot, not as a session, without the session actions.
+    func testArchivedAndBotChatMatchesAreLabeledAndRouted() async throws {
+        let wire = HermesSessionListWire()
+        wire.searchResults = [
+            HermesSessionSearchResult(row: HermesSessionRow(id: "gone", title: "Old launch", archived: true, profile: "default")),
+            HermesSessionSearchResult(row: HermesSessionRow(id: "bot", title: "Bot Chat", hidden: true, profile: "default"))
+        ]
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "launch", debounceNanoseconds: 0)
+
+        let shown = list.visibleSessions(searchText: "launch", selectedProjectID: nil)
+        let archived = try XCTUnwrap(shown.first { $0.sessionId == "gone" })
+        XCTAssertTrue(SessionRowView.accessibilityStateLabels(for: archived, isViewingCachedData: false, labelsArchived: true)
+            .contains("Archived"))
+        XCTAssertFalse(SessionRowView.accessibilityStateLabels(for: archived, isViewingCachedData: false).contains("Archived"),
+                       "the Archived screen's rows go unlabeled")
+        XCTAssertEqual(archived.hermesTarget(listedIn: "default"), .session(profile: "default", key: "gone"))
+        XCTAssertNil(archived.hermesBot(on: server, connectionID: connection.id))
+        XCTAssertTrue(SessionRowActionPolicy.offersMutationActions(for: archived))
+
+        let bot = try XCTUnwrap(shown.first { $0.sessionId == "bot" })
+        XCTAssertEqual(SessionRowView.displayTitle(for: bot), "Bot Chat · default")
+        XCTAssertEqual(bot.hermesBot(on: server, connectionID: connection.id),
+                       BotDestination(server: server, connectionID: connection.id, profile: "default"))
+        XCTAssertFalse(SessionRowActionPolicy.offersMutationActions(for: bot), "pinning would unhide it")
+    }
+
+    /// Clearing the search shows the loaded list again, without the host's matches or snippets.
+    func testClearingTheSearchRestoresTheList() async {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: HermesSessionPage(rows: [HermesSessionRow(id: "a", title: "Alpha", lastActive: 2),
+                                                             HermesSessionRow(id: "b", title: "Beta", lastActive: 1)])]
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old", profile: "default"),
+                                                        snippet: ">>>alpha<<<")]
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "alpha", debounceNanoseconds: 0)
+        XCTAssertEqual(list.visibleSessions(searchText: "alpha", selectedProjectID: nil).compactMap(\.sessionId), ["a", "old"])
+
+        await list.searchSessions(query: "", debounceNanoseconds: 0)
+
+        XCTAssertEqual(list.visibleSessions(searchText: "", selectedProjectID: nil).compactMap(\.sessionId), ["a", "b"])
+        XCTAssertEqual(wire.searches.count, 1, "an empty query never asks the host")
+    }
+
+    /// The same search running again, as when a chat opened from its matches closes, keeps them
+    /// on screen until the host answers; a new query clears them at once.
+    func testRepeatingTheSearchKeepsItsMatchesUntilTheHostAnswers() async {
+        let wire = HermesSessionListWire()
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old", profile: "default"))]
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "old", debounceNanoseconds: 0)
+
+        wire.holdsSearch = true
+        let again = Task { await list.searchSessions(query: "old", debounceNanoseconds: 0) }
+        await waitUntil("search parked") { wire.searches.count == 2 }
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: nil).compactMap(\.sessionId), ["old"])
+        wire.release()
+        await again.value
+
+        let other = Task { await list.searchSessions(query: "older", debounceNanoseconds: 0) }
+        await waitUntil("search parked") { wire.searches.count == 3 }
+        XCTAssertEqual(list.visibleSessions(searchText: "older", selectedProjectID: nil), [])
+        wire.release()
+        await other.value
+    }
+
+    /// A search the list moved off its Profile from never applies there.
+    func testASearchAnotherProfileReplacedIsDropped() async {
+        let wire = HermesSessionListWire()
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old", profile: "default"))]
+        let list = makeList(wire)
+        await list.openHermes()
+
+        wire.holdsSearch = true
+        let search = Task { await list.searchSessions(query: "old", debounceNanoseconds: 0) }
+        await waitUntil("search parked") { wire.searches.count == 1 }
+        await list.selectHermesProfile("research")
+        wire.release()
+        await search.value
+
+        XCTAssertEqual(list.hermesProfile, "research")
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: nil), [])
+    }
+
+    private func makeList(_ wire: HermesSessionListWire) -> SessionListViewModel {
+        SessionListViewModel(server: server, unreadStore: SessionUnreadStore(defaults: defaults), hermes: HermesSessionListSource(
+            connection: connection, profile: "default", makeWire: { _ in wire }, preferences: defaults,
+            changeDebounce: .zero, statusPollInterval: .seconds(3600), reconnectDelays: [.seconds(3600)]
+        ))
+    }
+
+    /// Waits on observation of the wire, never a clock, and fails once nothing changes for 5 s.
+    private func waitUntil(_ description: String, file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping @MainActor () -> Bool) async {
+        while !condition() {
+            let changed = XCTestExpectation(description: description)
+            withObservationTracking { _ = condition() } onChange: { changed.fulfill() }
+            guard await XCTWaiter().fulfillment(of: [changed], timeout: 5) == .completed else {
+                return XCTFail("Nothing changed while waiting for: \(description)", file: file, line: line)
+            }
+        }
+    }
+}
+
 /// A scripted Hermes host for the Sessions list: pages by Profile and offset, read marks,
-/// `session.active_list`, `profiles.list` and `session.most_recent`. A test can park page reads
-/// or read-mark writes, and push gateway events.
+/// `session.active_list`, `profiles.list`, `session.most_recent` and the search (#1053). A test
+/// can park page reads, read-mark writes or searches, and push gateway events.
 @MainActor @Observable final class HermesSessionListWire: BotTransport {
     struct UnreadWrite: Equatable { let key: String; let profile: String; let unread: Bool }
 
@@ -390,6 +600,10 @@ import Observation
     var unreadFails = false
     /// Thrown by the next page read instead of its page.
     var pageFailure: BotFailure?
+    /// What every search answers, whatever its query.
+    var searchResults: [HermesSessionSearchResult] = []
+    var holdsSearch = false
+    private(set) var searches: [(query: String, profile: String)] = []
     private(set) var connects = 0
     private(set) var pageReads: [(profile: String, offset: Int)] = []
     private(set) var answeredPages = 0
@@ -431,6 +645,13 @@ import Observation
         if holdsUnread { await withCheckedContinuation { held.append($0) } }
         if unreadFails { throw BotFailure.rejected(500) }
         return nil
+    }
+
+    func searchSessions(query: String, profile: String) async throws -> [HermesSessionSearchResult] {
+        searches.append((query, profile))
+        let reply = searchResults
+        if holdsSearch { await withCheckedContinuation { held.append($0) } }
+        return reply
     }
 
     func release() {

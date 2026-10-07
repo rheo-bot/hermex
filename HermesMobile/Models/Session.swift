@@ -214,6 +214,8 @@ struct SessionSummary: Decodable, Equatable, Hashable, Identifiable {
         let unread: Bool
         /// The first prompt, cut at 60 characters, as an untitled row shows it.
         let preview: String?
+        /// A bot's canonical Bot Chat, which the Sessions list opens in that bot (#1053).
+        var isBotChat = false
     }
 
     var id: String {

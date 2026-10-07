@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// The Sessions list the inbox's + menu pushed on a Hermes server (#1046): the server, its saved
-/// connection, and the Profile the list opens on.
+/// connection, and the Profile the list opens on, searching `query` when a chat's `/resume`
+/// opened it (#1053).
 struct HermesSessionListEntry: Hashable, Identifiable {
     let id = UUID()
     let server: URL
     let connection: BotConnection
     let profile: String
+    var query = ""
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -19,7 +21,9 @@ struct HermesSessionListEntry: Hashable, Identifiable {
 /// while a chat covers it, and closes when it leaves or the app goes to the background. Rows
 /// rename, pin, archive (with Undo and an Archived screen), delete and export as JSON (#1048).
 /// Its project rows are the host's folder-based project lanes (#1052): a pick filters the list to
-/// one lane, and a row's Move to Project changes the session's working folder.
+/// one lane, and a row's Move to Project changes the session's working folder. Its search (#1053)
+/// filters the loaded rows at once and then adds the host's matches, which reach past the loaded
+/// pages; a bot's Bot Chat among them opens in that bot.
 struct HermesSessionListView: View {
     /// The webui list's Projects disclosure, alone.
     private static let projectRows = SidebarSectionVisibility(
@@ -52,9 +56,11 @@ struct HermesSessionListView: View {
     /// The Move to Project a project created from a row's Move menu still needs, asked once the
     /// sheet is gone.
     @State private var movingAfterCreation: HermesProjectMove?
+    @State private var searchText: String
 
     init(entry: HermesSessionListEntry) {
         self.entry = entry
+        _searchText = State(initialValue: entry.query)
         let server = entry.server
         _viewModel = State(initialValue: SessionListViewModel(server: server, hermes: HermesSessionListSource(
             connection: entry.connection, profile: entry.profile, makeWire: { BotClient(saved: $0, server: server) }
@@ -72,16 +78,18 @@ struct HermesSessionListView: View {
             )
             SessionListRowsSection(
                 viewModel: viewModel,
-                sessions: viewModel.visibleSessions(searchText: "", selectedProjectID: selectedProjectID),
-                emptyTitle: selectedProjectID == nil ? String(localized: "No sessions yet") : String(localized: "No sessions in this project"),
-                emptyDescription: nil,
+                searchText: searchText,
+                sessions: viewModel.visibleSessions(searchText: searchText, selectedProjectID: selectedProjectID),
+                emptyTitle: emptyTitle,
+                emptyDescription: isSearching ? String(localized: "Try another search or project filter.") : nil,
                 isSearchActive: false,
                 showsMessageCount: showsMessageCount,
                 showsWorkspace: showsWorkspace,
                 selectedSessionID: nil,
                 actions: actions
             )
-            if showsLoadMore { loadMoreRow }
+            // A search reads the host's whole list, so it pages nothing in.
+            if showsLoadMore && !isSearching { loadMoreRow }
             archivedRow
         }
         .listStyle(.plain)
@@ -94,6 +102,11 @@ struct HermesSessionListView: View {
                 .padding(.bottom, 22)
         }
         .refreshable { await viewModel.openHermes() }
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search sessions")
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+        // Debounced inside; a new query or Profile cancels the search in flight.
+        .task(id: [profile, searchText]) { await viewModel.searchSessions(query: searchText) }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -106,7 +119,12 @@ struct HermesSessionListView: View {
         }
         // Keyed by the chat, so a Profile picked in an empty chat replaces its screen (#1015).
         .navigationDestination(item: $chat) { chat in
-            ChatView(hermesSession: chat) { self.chat = $0 }.id(chat.id)
+            // `/sessions` and `/resume` in the chat come back here, searching what they name.
+            ChatView(hermesSession: chat, onReplace: { self.chat = $0 }, onOpenSessions: { query in
+                self.chat = nil
+                searchText = query
+            })
+            .id(chat.id)
         }
         .navigationDestination(isPresented: $showingArchived) {
             ArchivedSessionsView(server: entry.server, hermes: .saved(entry.connection, server: entry.server, profile: profile))
@@ -196,6 +214,13 @@ struct HermesSessionListView: View {
 
     private var profile: String { viewModel.hermesProfile ?? entry.profile }
 
+    private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private var emptyTitle: String {
+        if isSearching { return String(localized: "No matching sessions") }
+        return selectedProjectID == nil ? String(localized: "No sessions yet") : String(localized: "No sessions in this project")
+    }
+
     /// The Profile whose sessions are listed. Picking another lists it and makes it the
     /// server's pick, which the composer's Profile chip shares (#1015).
     private var profileMenu: some View {
@@ -277,11 +302,16 @@ struct HermesSessionListView: View {
     /// Opening a row, Mark as Read or Unread, and the row actions `SessionRowActionPolicy`
     /// offers a Hermes row; Duplicate waits on a later slice of #702. Move to Project asks first,
     /// and its New Project starts on the session's folder, then asks to move it there if it
-    /// was saved on another.
+    /// was saved on another. A bot's Bot Chat, which only a search lists, opens in that bot
+    /// through the app's bot route, as a notification's tap does (#1053).
     private var actions: SessionListRowActions {
         SessionListRowActions(
             retryLoad: { Task { await viewModel.openHermes() } },
             open: { session in
+                if let bot = session.hermesBot(on: entry.server, connectionID: entry.connection.id) {
+                    AppIntentRouter.shared.requestDeepLink(HermesDeepLink.botURL(for: bot))
+                    return
+                }
                 guard let target = session.hermesTarget(listedIn: profile) else { return }
                 viewModel.beginViewing(session)
                 chat = HermesSessionChat(server: entry.server, connection: entry.connection, target: target)
@@ -406,5 +436,12 @@ extension SessionSummary {
     func hermesTarget(listedIn profile: String) -> ConversationTarget? {
         guard hermes != nil, let key = sessionId, !key.isEmpty else { return nil }
         return .session(profile: self.profile.flatMap { $0.isEmpty ? nil : $0 } ?? profile, key: key)
+    }
+
+    /// The bot whose Bot Chat this row is (#1053): the Sessions list opens it there, so one chat
+    /// never has two screens and two read marks. Nil for any other row.
+    func hermesBot(on server: URL, connectionID: UUID) -> BotDestination? {
+        guard hermes?.isBotChat == true, let profile, !profile.isEmpty else { return nil }
+        return BotDestination(server: server, connectionID: connectionID, profile: profile)
     }
 }

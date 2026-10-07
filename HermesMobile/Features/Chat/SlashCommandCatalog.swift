@@ -217,7 +217,8 @@ enum SlashCommandCatalog {
     /// command of the same name never runs. Every other command its host lists runs there.
     /// `/title` is `session.title` on the chat's runtime (#1048); `/retry` and `/undo` rewind
     /// the session's history as Regenerate does (#1049); `/compress` and `/compact` are
-    /// `session.compress`, and `/clear` opens a new chat in this one's place (#1050).
+    /// `session.compress`, and `/clear` opens a new chat in this one's place (#1050). `/sessions`
+    /// and `/resume` open the Sessions list, or a session by its title (#1053).
     static let hermesCommands: [SlashCommand] = ["new", "stop", "model", "reasoning", "personality", "title", "goal",
                                                  "btw", "background", "bg", "retry", "undo", "compress",
                                                  "compact"].compactMap(command(named:)) + [
@@ -226,6 +227,19 @@ enum SlashCommandCatalog {
             description: String(localized: "Start a new chat with the same model and folder"),
             noEcho: true,
             handler: .clientSide(.clear)
+        ),
+        SlashCommand(
+            name: "sessions",
+            description: String(localized: "Show this Profile’s sessions"),
+            noEcho: true,
+            handler: .clientSide(.sessions)
+        ),
+        SlashCommand(
+            name: "resume",
+            description: String(localized: "Open a session by its title"),
+            argHint: String(localized: "name"),
+            noEcho: true,
+            handler: .clientSide(.resume)
         ),
         SlashCommand(
             name: "yolo",
@@ -239,9 +253,9 @@ enum SlashCommandCatalog {
         hermesCommands.first { $0.name.lowercased() == name.lowercased() }
     }
 
-    /// Host commands a Hermes chat holds until #702 slice 2.3: they rewrite history or move
-    /// between chats, so the host alone would leave the phone stale. Listed, never run.
-    static let hermesHeldNames: Set<String> = ["branch", "fork", "resume", "sessions"]
+    /// Host commands a Hermes chat holds until a later slice of #702: they rewrite history or
+    /// move between chats, so the host alone would leave the phone stale. Listed, never run.
+    static let hermesHeldNames: Set<String> = ["branch", "fork"]
 
     static let reasoningLevels = ["show", "hide", "none", "minimal", "low", "medium", "high", "xhigh"]
     static let goalActions = ["status", "pause", "resume", "clear"]

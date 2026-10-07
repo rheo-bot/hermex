@@ -2724,6 +2724,33 @@ final class ChatViewModel {
                                            target: .new(profile: profile)) }
     }
 
+    /// `/sessions` and a bare `/resume` in a Hermes chat (#1053): its Profile's Sessions list,
+    /// searching `query`. Webui has neither command.
+    private func hermesSessionList(searching query: String) -> SlashCommandExecutionResult {
+        guard let hermesTurn else { return .unsupported(friendlyMessage: SlashCommandExecutor.unsupportedMessage(for: "sessions")) }
+        return .openedHermesSessionList(HermesSessionListEntry(server: hermesTurn.engine.server, connection: hermesTurn.engine.connection,
+                                                               profile: hermesTurn.settings.profile, query: query))
+    }
+
+    /// `/resume <name>` in a Hermes chat (#1053): searches the Profile for `name` and opens the
+    /// one session titled exactly that, ignoring case. Anything else (no such title, several,
+    /// a Bot Chat, which opens in its bot, or a failed search) opens the Sessions list searching
+    /// `name`, so it never opens the wrong chat. The host's search reads ids and message text,
+    /// not titles, so a title none of its messages share lands on the list, whose rows match it.
+    private func resumeHermesSession(named rawName: String) async -> SlashCommandExecutionResult {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let hermesTurn, !name.isEmpty else { return hermesSessionList(searching: name) }
+        let engine = hermesTurn.engine
+        let profile = hermesTurn.settings.profile
+        let results = (try? await engine.wire.searchSessions(query: name, profile: profile)) ?? []
+        let titled = results.filter { $0.row.title?.compare(name, options: .caseInsensitive) == .orderedSame }
+        guard titled.count == 1, let match = titled.first?.row, !match.isBotChat else { return hermesSessionList(searching: name) }
+        // Already open here.
+        if match.id == engine.storedKey { return .executed(message: nil) }
+        return .openedHermesSession(HermesSessionChat(server: engine.server, connection: engine.connection,
+                                                      target: .session(profile: match.profile ?? profile, key: match.id)))
+    }
+
     /// Moves this new Hermes chat's draft, files included, to `chat`, which replaces it. A
     /// draft already waiting in that Profile's new chat stays, and this one keeps its key.
     func handOffHermesDraft(to chat: HermesSessionChat) async {
@@ -3333,6 +3360,10 @@ final class ChatViewModel {
                 return await createSessionFromSlashCommand()
             case .help:
                 return .executed(message: Self.slashCommandHelpText)
+            case .sessions:
+                return hermesSessionList(searching: "")
+            case .resume:
+                return await resumeHermesSession(named: args)
             }
         case .serverSide(let action):
             return await executeServerSideSlashCommand(action, args: args)

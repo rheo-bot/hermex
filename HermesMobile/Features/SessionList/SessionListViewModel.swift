@@ -188,6 +188,11 @@ final class SessionListViewModel {
     @ObservationIgnored private var hermesProjectsRead = false
     /// The host's reason for refusing the open project sheet's create or rename (#1052).
     private(set) var projectSheetErrorMessage: String?
+    /// The host's matches for the active search on a Hermes list (#1053), in its order, each a
+    /// row built from the result's own fields; a loaded row shows in its place.
+    private var hermesSearchRows: [SessionSummary] = []
+    /// Each content match's snippet, its `>>>`/`<<<` marks and all, by row identity.
+    private var hermesSearchSnippets: [String: String] = [:]
 
     /// `hermes` makes this a Hermes server's list; nothing then reaches the webui API.
     init(server: URL, client: APIClient? = nil, unreadStore: SessionUnreadStore = SessionUnreadStore(),
@@ -289,7 +294,8 @@ final class SessionListViewModel {
     }
 
     /// Visibility is decided per row, so running this over a subset of
-    /// `sessions` yields exactly the visible rows of that subset.
+    /// `sessions` yields exactly the visible rows of that subset. A Hermes search
+    /// also brings the host's matches the loaded pages lack (#1053).
     private func visibleSessions(
         among candidates: [SessionSummary],
         searchText rawSearchText: String,
@@ -313,6 +319,9 @@ final class SessionListViewModel {
 
         guard !query.isEmpty, activeRemoteSearchQuery == query else {
             return sortedLocalMatches
+        }
+        if hermes != nil {
+            return sortedLocalMatches + hermesSearchMatches(excluding: sortedLocalMatches, selectedProjectID: selectedProjectID)
         }
 
         let localMatchIDs = Set(sortedLocalMatches.compactMap(\.sessionId))
@@ -525,9 +534,13 @@ final class SessionListViewModel {
         debounceNanoseconds: UInt64 = 350_000_000
     ) async {
         let query = Self.normalizedSearchQuery(rawQuery)
+        // A Hermes list keeps showing its matches while the same search runs again, as when a
+        // chat opened from them closes, until the host's new answer replaces them.
+        let repeatsHermesSearch = hermes != nil && activeRemoteSearchQuery == query
         activeRemoteSearchQuery = query
         remoteContentSearchSessionIDs = []
         remoteContentSearchExcerpts = [:]
+        if !repeatsHermesSearch { clearHermesSearchMatches() }
         searchErrorMessage = nil
 
         guard !query.isEmpty, !isViewingCachedData else {
@@ -543,13 +556,17 @@ final class SessionListViewModel {
             guard !Task.isCancelled, activeRemoteSearchQuery == query else { return }
 
             isSearchingRemoteSessions = true
-            let response = try await client.searchSessions(query: query, content: content, depth: depth)
+            if hermes != nil {
+                guard try await searchHermes(query) else { return }
+            } else {
+                let response = try await client.searchSessions(query: query, content: content, depth: depth)
 
-            guard !Task.isCancelled, activeRemoteSearchQuery == query else { return }
+                guard !Task.isCancelled, activeRemoteSearchQuery == query else { return }
 
-            let matches = contentMatches(from: response.sessions ?? [])
-            remoteContentSearchSessionIDs = matches.sessionIDs
-            remoteContentSearchExcerpts = matches.excerpts
+                let matches = contentMatches(from: response.sessions ?? [])
+                remoteContentSearchSessionIDs = matches.sessionIDs
+                remoteContentSearchExcerpts = matches.excerpts
+            }
             isSearchingRemoteSessions = false
         } catch {
             guard activeRemoteSearchQuery == query else { return }
@@ -574,6 +591,10 @@ final class SessionListViewModel {
     /// `visibleSessions(searchText:selectedProjectID:)` applies to remote rows.
     func searchExcerpt(for session: SessionSummary, searchText: String) -> SessionSearchExcerpt? {
         let query = Self.normalizedSearchQuery(searchText)
+        if session.hermes != nil {
+            guard !query.isEmpty, activeRemoteSearchQuery == query, let snippet = hermesSearchSnippets[session.id] else { return nil }
+            return SessionSearchExcerpt(hermesSnippet: snippet, query: query)
+        }
 
         guard !query.isEmpty, activeRemoteSearchQuery == query,
               let sessionID = session.sessionId,
@@ -589,6 +610,7 @@ final class SessionListViewModel {
         activeRemoteSearchQuery = nil
         remoteContentSearchSessionIDs = []
         remoteContentSearchExcerpts = [:]
+        clearHermesSearchMatches()
         searchErrorMessage = nil
         isSearchingRemoteSessions = false
     }
@@ -1549,6 +1571,8 @@ final class SessionListViewModel {
     private static func searchableText(for session: SessionSummary) -> String {
         [
             session.title,
+            // An untitled Hermes row shows its first prompt, so that is what its words are.
+            session.hermes?.preview,
             session.workspace,
             session.model,
             session.modelProvider,
@@ -1897,6 +1921,7 @@ final class SessionListViewModel {
         sessions = []; hasMoreSessions = false; isLoadingMoreSessions = false
         hermesUnreadMarks = [:]; hermesReturnedFrom = []
         projects = []; hermesProjectOwners = [:]; hermesProjectsRead = false
+        clearHermesSearchMatches()
         errorMessage = nil; sessionLoadError = nil
         setHermesStates([:])
         guard let wire = hermesWire else { return await openHermes() }
@@ -1915,6 +1940,7 @@ final class SessionListViewModel {
         sessions = []; hasMoreSessions = false
         hermesUnreadMarks = [:]; hermesReturnedFrom = []
         projects = []; hermesProjectOwners = [:]; hermesProjectsRead = false
+        clearHermesSearchMatches()
         setHermesStates([:])
         isLoading = true
         return true
@@ -2012,6 +2038,40 @@ final class SessionListViewModel {
     /// Writes only a real change, so an unchanged re-read never invalidates the rows.
     private func setHermesStates(_ states: [String: SessionRowAttentionState]) {
         if states != attentionStatesBySessionID { attentionStatesBySessionID = states }
+    }
+
+    // MARK: Hermes search (#1053)
+
+    /// One search of the listed Profile for `query`, applied unless a newer search, a Profile
+    /// switch or a new client replaced it meanwhile. False when it was replaced.
+    private func searchHermes(_ query: String) async throws -> Bool {
+        guard let wire = hermesWire, let profile = hermesProfile else { throw BotFailure.transport }
+        let results = try await wire.searchSessions(query: query, profile: profile)
+        guard !Task.isCancelled, activeRemoteSearchQuery == query, hermesWire === wire, hermesProfile == profile else { return false }
+        hermesSearchRows = results.map { $0.row.summary(in: profile, project: hermesProjectOwners[$0.row.id]) }
+        hermesSearchSnippets = Dictionary(results.compactMap { result in result.snippet.map { (result.row.identity, $0) } },
+                                          uniquingKeysWith: { first, _ in first })
+        return true
+    }
+
+    /// The host's matches the local filter missed, in the host's order, so a pasted id's
+    /// session leads. Each merges with the list by identity, its compression lineage's root: a
+    /// loaded row shows as listed, pin and read mark included, and any other from the result.
+    private func hermesSearchMatches(excluding shown: [SessionSummary], selectedProjectID: String?) -> [SessionSummary] {
+        guard !hermesSearchRows.isEmpty else { return [] }
+        var seen = Set(shown.map(\.id))
+        let loaded = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return hermesSearchRows.compactMap { result in
+            let row = loaded[result.id] ?? result
+            guard selectedProjectID == nil || row.projectId == selectedProjectID, seen.insert(row.id).inserted else { return nil }
+            return row
+        }
+    }
+
+    /// Writes only a real change, so clearing an empty search never invalidates the rows.
+    private func clearHermesSearchMatches() {
+        if !hermesSearchRows.isEmpty { hermesSearchRows = [] }
+        if !hermesSearchSnippets.isEmpty { hermesSearchSnippets = [:] }
     }
 
     // MARK: Hermes row actions (#1048)

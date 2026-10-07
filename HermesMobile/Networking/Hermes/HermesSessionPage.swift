@@ -105,8 +105,75 @@ struct HermesSessionRow: Decodable, Equatable {
             workspace: cwd, model: model, messageCount: messageCount, createdAt: startedAt, lastMessageAt: lastActive,
             pinned: pinned, archived: archived, projectId: project, profile: profile, parentSessionId: parentSessionID,
             hermes: SessionSummary.Hermes(lineageRoot: identity, unread: unread == true,
-                                          preview: MessageAttachment.hermesTitle(preview))
+                                          preview: MessageAttachment.hermesTitle(preview), isBotChat: isBotChat)
         )
+    }
+}
+
+/// One `GET /api/sessions/search` reply (#1053): a Profile's matches for one query, id matches
+/// first, then message-content matches, one per compression lineage, archived and hidden
+/// sessions included. A result that can't be read is skipped; a reply without `results` is a
+/// failed read.
+struct HermesSessionSearch: Decodable, Equatable {
+    let results: [HermesSessionSearchResult]
+
+    init(results: [HermesSessionSearchResult]) {
+        self.results = results
+    }
+
+    enum CodingKeys: String, CodingKey { case results }
+
+    init(from decoder: Decoder) throws {
+        results = try decoder.container(keyedBy: CodingKeys.self).decode([Slot].self, forKey: .results).compactMap(\.result)
+    }
+
+    private struct Slot: Decodable {
+        let result: HermesSessionSearchResult?
+        init(from decoder: Decoder) throws { result = try? HermesSessionSearchResult(from: decoder) }
+    }
+}
+
+/// One search match: the session as a list row, and the message text it matched on.
+struct HermesSessionSearchResult: Decodable, Equatable {
+    /// Opened by `session_id`, the lineage's tip, and merged with the list's rows by
+    /// `lineage_root`. The reply has no `pinned`, `unread`, `hidden` or `cwd`.
+    let row: HermesSessionRow
+    /// A content match's FTS `snippet()`: the message's text with `>>>` and `<<<` around each
+    /// match and `...` where it was cut. Nil for an id match, whose snippet is only its preview.
+    let snippet: String?
+
+    init(row: HermesSessionRow, snippet: String? = nil) {
+        self.row = row
+        self.snippet = snippet
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id", id, title, preview, archived, model, profile, snippet, role
+        case lineageRoot = "lineage_root", lastActive = "last_active", sessionStarted = "session_started"
+        case startedAt = "started_at", messageCount = "message_count", parentSessionID = "parent_session_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let result = try decoder.container(keyedBy: CodingKeys.self)
+        let nonEmpty = { (key: CodingKeys) in result.decodeLossyStringIfPresent(forKey: key).flatMap { $0.isEmpty ? nil : $0 } }
+        guard let id = nonEmpty(.sessionID) ?? nonEmpty(.id) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "A search result without an id"))
+        }
+        let time = { (key: CodingKeys) in result.decodeLossyDoubleIfPresent(forKey: key).flatMap { $0.isFinite ? $0 : nil } }
+        let title = result.decodeLossyStringIfPresent(forKey: .title)
+        row = HermesSessionRow(
+            id: id, title: title, preview: result.decodeLossyStringIfPresent(forKey: .preview),
+            // A content match without the session's row has no `last_active`.
+            lastActive: time(.lastActive) ?? time(.sessionStarted), startedAt: time(.startedAt) ?? time(.sessionStarted),
+            archived: result.decodeLossyBoolIfPresent(forKey: .archived),
+            // Without `hidden`, the title is the tell: a bot's canonical Bot Chat is the session
+            // under that exact title, and the host refuses renaming it.
+            hidden: title == HermesCall.botChatTitle ? true : nil,
+            model: result.decodeLossyStringIfPresent(forKey: .model), messageCount: result.decodeLossyIntIfPresent(forKey: .messageCount),
+            profile: nonEmpty(.profile), parentSessionID: nonEmpty(.parentSessionID), lineageRootID: nonEmpty(.lineageRoot)
+        )
+        // An id match has no `role`; its snippet repeats the preview or says "Session ID: …".
+        snippet = nonEmpty(.role) == nil ? nil : nonEmpty(.snippet)
     }
 }
 

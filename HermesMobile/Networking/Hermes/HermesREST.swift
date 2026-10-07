@@ -63,11 +63,16 @@ import Foundation
 /// PATCH answers `{ok, title, <flag>}`, a refused title (in use, over 100 characters, the canonical
 /// Bot Chat) is 400 `{detail}`, an archived list back-fills non-archived pinned rows, and the
 /// export is the session row with its `messages`, without a `Content-Disposition`.
+/// The search (#1053) is read at the same pin and checked against `scripts/local-hermes`:
+/// `{results: [...]}`, an empty `q` answers none, and a Profile the host lacks is 404 `{detail}`;
+/// `HermesSessionSearch` has the result's fields.
 enum HermesREST: Equatable, Sendable {
     /// The most rows `GET /api/sessions` lists in one page.
     static let sessionPageSize = 100
     /// The most display rows one transcript page (`sessionMessages` with an offset) carries.
     static let transcriptPageSize = 100
+    /// The most sessions one search answers; the host allows up to 100 and defaults to 20.
+    static let sessionSearchLimit = 50
 
     /// Public, so it reads the host before any credential is sent.
     case status
@@ -114,6 +119,9 @@ enum HermesREST: Equatable, Sendable {
     case updateSession(key: String, profile: String, change: HermesSessionChange)
     /// That exact session's row and every message, unredacted, as one JSON object (#1048).
     case sessionExport(key: String, profile: String)
+    /// `profile`'s sessions matching `query` (#1053): id matches, then message-content matches,
+    /// at most `sessionSearchLimit`, archived and hidden ones included, without machine-run rows.
+    case sessionSearch(query: String, profile: String)
     /// Every Profile's scheduled Tasks, paused and completed included: a bare array.
     case cronJobs
     /// Creates a Task in `profile`, or in the host's default Profile when nil.
@@ -314,6 +322,20 @@ enum HermesREST: Equatable, Sendable {
         case .sessionExport(let key, let profile):
             guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
             return Self.get(try Self.url(base, "api/sessions/\(key)/export", profile: profile))
+        case .sessionSearch(let query, let profile):
+            guard !query.isEmpty, !profile.isEmpty,
+                  var parts = URLComponents(url: base.appendingPathComponent("api/sessions/search"), resolvingAgainstBaseURL: false)
+            else { throw BotFailure.invalidAddress }
+            // The same sources the list leaves out, so a search never finds a row it never shows.
+            parts.queryItems = [
+                URLQueryItem(name: "q", value: query), URLQueryItem(name: "profile", value: profile),
+                URLQueryItem(name: "limit", value: String(Self.sessionSearchLimit)),
+                URLQueryItem(name: "exclude_sources", value: "cron,kanban,oneshot,subagent,tool")
+            ]
+            // The host reads a bare `+` as a space, so a typed one ("c++") is escaped.
+            parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+            guard let url = parts.url else { throw BotFailure.invalidAddress }
+            return Self.get(url)
         case .cronJobs: return Self.get(base.appendingPathComponent("api/cron/jobs"))
         case .cronCreate(let profile, let fields):
             return try Self.send("POST", try Self.url(base, "api/cron/jobs", profile: profile), fields)

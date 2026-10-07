@@ -343,9 +343,11 @@ struct BotsInboxHome {
     /// guessing (#554).
     private func openPendingDestination() {
         guard let destination = pendingDestination, destination.server == server else { return }
-        // A pushed chat closes the inbox socket. Return to the inbox before waiting
-        // for its roster, so its appearance task can reconnect and resolve the link.
+        // A pushed screen closes the inbox socket. Return to the inbox before waiting
+        // for its roster, so its appearance task can reconnect and resolve the link,
+        // as when the Sessions list opens a Bot Chat it found (#1053).
         selection = BotInboxSelection()
+        newSession = nil; sessionList = nil; tasks = nil; showingKanban = false
         guard BotDeepLinkRouter.inboxCanAnswer(
             link: inbox.link, hasConnection: inbox.connection != nil, hasSettled: hasSettled
         ) else { return }

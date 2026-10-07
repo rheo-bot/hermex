@@ -188,6 +188,8 @@ enum BotConnectionAdvice {
     func updateSession(_ change: HermesSessionChange, key: String, profile: String) async throws -> String?
     /// The session's row and messages as the host exports them (`HermesREST.sessionExport`, #1048).
     func exportSession(key: String, profile: String) async throws -> Data
+    /// `profile`'s sessions matching `query`, in the host's order (`HermesREST.sessionSearch`, #1053).
+    func searchSessions(query: String, profile: String) async throws -> [HermesSessionSearchResult]
     /// The runtimes this phone's screens attached on the connection (`session.resume`) and have
     /// not closed, so a delete can tell its own from another app's (#1048).
     var attachedRuntimes: Set<String> { get }
@@ -238,6 +240,10 @@ extension BotTransport {
     }
 
     func exportSession(key: String, profile: String) async throws -> Data {
+        throw BotFailure.unsupported
+    }
+
+    func searchSessions(query: String, profile: String) async throws -> [HermesSessionSearchResult] {
         throw BotFailure.unsupported
     }
 

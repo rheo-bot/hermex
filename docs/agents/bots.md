@@ -1270,6 +1270,38 @@ Checked against `scripts/local-hermes` at the pin: `tui_gateway/methods_projects
 `methods_config.py` (`projects.tree`), `project_tree.py` (`build_tree`), `methods_complete.py`
 (`complete.path`) and `methods_session.py` (`session.workspace.move`).
 
+### Search (#1053)
+
+The list's search field filters the loaded rows at once (title, an untitled row's first
+prompt, folder, model and Profile, as webui's does), then, after webui's 350 ms debounce,
+adds the host's matches from the listed Profile:
+`GET /api/sessions/search?q=&profile=&limit=50&exclude_sources=cron,kanban,oneshot,subagent,tool`
+(`HermesREST.sessionSearch`, read by `HermesSessionSearch`). The host matches session ids
+first, then message text through FTS5 with each word prefix-matched; it never matches
+titles, so a title search finds only loaded rows and sessions whose messages share its
+words. Results are one per compression lineage, archived and hidden ones included, and carry
+no `pinned`, `unread`, `hidden` or `cwd`.
+
+- **Merge.** The host's matches follow the local ones in the host's order, so a pasted id
+  leads. Each merges by identity (`lineage_root`, the list's `_lineage_root_id ?? id`): a
+  loaded row shows as listed, and any other from the result's own fields, with recency
+  `last_active ?? session_started` (a content match without the session's row has no
+  `last_active`). A search stops paging, since it reads the whole Profile. A new query or
+  Profile clears the host's matches at once; the same search running again, as when a chat
+  opened from them closes, keeps them until the host answers.
+- **Snippets.** A content match (one with a `role`) carries FTS `snippet()` text with `>>>`
+  and `<<<` around each match; `SessionSearchExcerpt(hermesSnippet:)` bolds those spans and
+  never shows the marks. An id match's snippet is only its preview and shows nothing.
+- **Labels.** An archived match shows "Archived" and opens as a session; restoring stays on
+  the Archived screen. The payload has no `hidden`, so a match titled exactly "Bot Chat" is
+  that Profile's canonical Bot Chat ("Bot Chat · <Profile>"); it opens in its bot through the
+  bot deep-link route (`AppIntentRouter`, then `ContentView`'s `pendingBotDestination`), which
+  first pops the inbox's pushed screens so the inbox can resolve it. It offers no pin, rename,
+  move, archive or delete: it belongs to its bot, and `pinned: true` would also unhide it.
+
+Checked against `scripts/local-hermes` at the pin: `hermes_cli/web_routers/sessions.py`
+(`search_sessions`) and `hermes_state_search.py` (`search_sessions_by_id`, `_fts_match_sql`).
+
 ## Tasks on a Hermes host
 
 The Tasks screens run on a Hermes host through `HermesCronClient` (#1040), the
@@ -1819,18 +1851,20 @@ Send resolves a draft that opens with `/name` in this order:
 
 1. **Hermex's own** (`SlashCommandCatalog.hermesCommands`): `/new`, `/stop`,
    `/model`, `/reasoning`, `/personality`, `/title`, `/goal`, `/btw`, `/bg` and
-   `/background`, `/retry` and `/undo`, `/compress`, `/compact` and `/clear`, and `/yolo`
-   (the session's `config.set yolo`).
+   `/background`, `/retry` and `/undo`, `/compress`, `/compact` and `/clear`, `/yolo`
+   (the session's `config.set yolo`), and `/sessions` and `/resume` (#1053).
    Each keeps its native path; an alias such as `/reset` resolves to its command first.
    `/title` (#1048) is `session.title {session_id: <runtime>, title}`; the header takes
    the title the host kept, and `session.info`'s `title` after that. A title in use or
    too long is 4022 with the host's message, and the draft stays. `/retry` and `/undo`
    (#1049) rewind the session as above, never through the host's `command.dispatch`,
    whose retry still needs a follow-up submit. `/compress`, `/compact` and `/clear`
-   (#1050) compress and start a new chat as above.
-2. **Held until #702 slice 2.3** (`hermesHeldNames`): `/branch`, `/fork`, `/resume`,
-   `/sessions`. They move between chats, so they show a notice naming #702 and send
-   nothing.
+   (#1050) compress and start a new chat as above. `/sessions` and a bare `/resume`
+   (#1053) go back to the Sessions list under the chat, or push one in the chat's
+   Profile; `/resume <name>` opens the one session the list's search finds titled exactly
+   `<name>` (ignoring case), and otherwise the list searching `<name>`.
+2. **Held until a later slice of #702** (`hermesHeldNames`): `/branch` and `/fork`. They
+   move between chats, so they show a notice naming #702 and send nothing.
 3. **A catalog skill**: `command.dispatch` expands it and `message` is submitted.
 4. **Any other catalog command or alias**: `slash.exec {session_id, command}`
    with the typed line, once.

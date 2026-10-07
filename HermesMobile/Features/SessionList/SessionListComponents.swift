@@ -104,8 +104,10 @@ struct SessionListRowActions {
 /// rename, archive, delete, Export as JSON and Move to Project (#1052). Duplicate waits on a
 /// later slice of #702; the host has no HTML export, and Hermes deep links are #706.
 enum SessionRowActionPolicy {
+    /// Pin, rename, move, archive and delete. A bot's Bot Chat, which a Hermes search lists
+    /// (#1053), belongs to its bot: pinning would also unhide it, and renaming orphans it.
     static func offersMutationActions(for session: SessionSummary) -> Bool {
-        !session.isSessionReadOnly
+        !session.isSessionReadOnly && session.hermes?.isBotChat != true
     }
 
     static func offersProjectMove(for session: SessionSummary) -> Bool {
@@ -660,7 +662,8 @@ struct SessionInteractiveRow: View {
                 isViewingCachedData: viewModel.isViewingCachedData,
                 isUnread: viewModel.isUnread(session),
                 attentionState: viewModel.attentionState(for: session),
-                searchExcerpt: viewModel.searchExcerpt(for: session, searchText: searchText)
+                searchExcerpt: viewModel.searchExcerpt(for: session, searchText: searchText),
+                labelsArchived: true
             )
         }
         .buttonStyle(.plain)
