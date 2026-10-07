@@ -309,7 +309,9 @@ row already held, and every newest read goes back page by page until it reaches 
 (at most five pages), so a turn of more than a page leaves no hole. Load earlier after a turn
 the history has not taken (no `persisted_turn` receipt, or a turn still running) reads the
 newest rows first: idle, the transcript takes them; mid-turn, they are only counted, and the
-older page's offset skips them. `HermesTranscriptProjection` makes each row `<key>/row-<id>`
+older page's offset skips them. A full older page that adds nothing (rows the chat never
+heard of, such as another client's) keeps paging open and makes the next Load earlier do the
+same. `HermesTranscriptProjection` makes each row `<key>/row-<id>`
 with `rowID = id`: tool rows join their call by `tool_call_id` with the full output, `hidden`
 rows and `[System:` notices never show, `codex_*` columns are never read, a skill turn's
 expanded skill shows as the typed `/skill` line (a port of the host's

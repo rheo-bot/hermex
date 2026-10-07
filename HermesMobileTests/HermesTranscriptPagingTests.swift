@@ -254,6 +254,25 @@ import Observation
         XCTAssertEqual(chat.pages.offsets, [0, 0, 100, 200, 300])
     }
 
+    /// Rows the chat heard nothing about (another client, such as the CLI, wrote to the session)
+    /// can push the rows held into the older page, so it adds nothing. Paging stays open, and the
+    /// next Load earlier reads the newest rows again first, then reaches the first row.
+    func testAnOlderPageThatAddsNothingRecountsNextTime() async {
+        let chat = await openChat(pages: [0: (101...200).map(alternating)])
+        chat.pages.set(0, (201...300).map(alternating))
+        chat.pages.set(100, (101...200).map(alternating))
+        chat.pages.set(200, (1...100).map(alternating))
+
+        let stuck = await chat.model.loadOlderMessages()
+        XCTAssertFalse(stuck)
+        XCTAssertTrue(chat.model.hasOlderMessages, "a full page that met the rows held is no start")
+
+        let loaded = await chat.model.loadOlderMessages()
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(chat.pages.offsets, [0, 100, 0, 100, 200])
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), Array(1...300))
+    }
+
     /// While a turn runs, the rows it saved shift every older page, here by more than a page.
     /// Load earlier counts them in the newest rows, back to the rows held, without showing them
     /// twice, and reads the page before the rows held.

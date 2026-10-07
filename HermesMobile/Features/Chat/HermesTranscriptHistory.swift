@@ -15,6 +15,9 @@ struct HermesTranscriptHistory: Equatable {
     /// Rows the host saved after the newest row held, as last counted: a running turn's, which
     /// the chat shows as they stream.
     private var newer = 0
+    /// A full older page added nothing: rows the chat never counted pushed the rows held into
+    /// it. The next page waits until the newest rows are read again.
+    private(set) var needsRecount = false
 
     /// Where the next older page starts: the display rows held and the newer ones, counted
     /// from the newest.
@@ -42,6 +45,7 @@ struct HermesTranscriptHistory: Equatable {
             hasOlder = !reachedStart
         }
         newer = 0
+        needsRecount = false
     }
 
     /// Counts the rows read back from offset 0 after the newest one held, without taking them.
@@ -51,20 +55,22 @@ struct HermesTranscriptHistory: Equatable {
         let fresh = fresh.filter { Self.id($0).map { seen.insert($0).inserted } == true }
         guard let last = fresh.lastIndex(where: { Self.id($0).map(ids.contains) == true }) else { return false }
         newer = fresh.count - 1 - last
+        needsRecount = false
         return true
     }
 
     /// Puts the page read at `nextOffset` in front: its rows before the first row already held,
     /// since a page is oldest first and rows saved meanwhile push held rows into it. Returns
-    /// whether it added any. A short page reached the first row; a full one that added nothing
-    /// ends paging too, so the same page is never asked for again.
+    /// whether it added any. A short page reached the first row. A full one that added nothing
+    /// met the rows held, so more rows were saved than counted (`needsRecount`).
     @discardableResult
     mutating func prependOlder(_ page: [BotJSON]) -> Bool {
         var seen = ids
         let older = page.prefix { Self.id($0).map(ids.contains) != true }
             .filter { row in Self.id(row).map { seen.insert($0).inserted } == true }
         replace(with: older + rows)
-        hasOlder = page.count >= HermesREST.transcriptPageSize && !older.isEmpty
+        hasOlder = page.count >= HermesREST.transcriptPageSize
+        needsRecount = hasOlder && older.isEmpty
         return !older.isEmpty
     }
 

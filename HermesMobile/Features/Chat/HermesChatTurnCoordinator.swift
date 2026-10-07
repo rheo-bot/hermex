@@ -752,14 +752,16 @@ struct HermesChatTranscript: Equatable {
     /// Puts the page before the oldest row held in front (#1047), and says whether it added
     /// rows. A turn since the newest rows were taken shifted every older page by the rows it
     /// saved, so the newest rows are read first: taken while idle, so the turn's rows take
-    /// their ids, or only counted while a turn runs, whose rows show as they stream. A failed
+    /// their ids, or only counted while a turn runs, whose rows show as they stream. So are
+    /// they after a page that added nothing (rows the chat never heard of, such as another
+    /// client's, shifted it). A failed
     /// read says why in the chat; one that lands after the history moved, or after the attach
     /// changed, is dropped.
     func loadOlderHistory() async -> Bool {
         guard history.hasOlder, engine.connectionState == .connected else { return false }
         let attempt = engine.generation, turns = turnsStarted
         do {
-            if historyTurns != turns || !isIdle {
+            if historyTurns != turns || !isIdle || history.needsRecount {
                 let fresh = try await newestRows(attempt: attempt)
                 if turns == turnsStarted, isIdle {
                     history.mergeNewest(fresh.rows, reachedStart: fresh.reachedStart)
