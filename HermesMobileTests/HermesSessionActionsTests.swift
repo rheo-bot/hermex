@@ -304,6 +304,44 @@ import Observation
         XCTAssertFalse(archive.sessions.contains { $0.sessionId == "s5" })
     }
 
+    /// Load more waits out a restore still on its way to the host, whose rows it would shift,
+    /// so every other archived row is still reached once the restore lands.
+    func testLoadMoreDuringARestoreSkipsNoRow() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        var archived = (0...200).map { "s\($0)" }
+        _ = HermesHostFixture.configuration { request in
+            switch request.httpMethod {
+            case "PATCH": return .park
+            case "GET" where request.url?.path == "/api/sessions":
+                let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems ?? []
+                let offset = Int(query.first { $0.name == "offset" }?.value ?? "") ?? 0
+                let rows = archived.dropFirst(offset).prefix(HermesREST.sessionPageSize)
+                return .json(200, .object(["sessions": .array(rows.map { .object(["id": .string($0), "archived": .bool(true)]) })]))
+            default: return nil
+            }
+        }
+        let parked = expectation(description: "restore parked")
+        HermesHostFixture.onPark = { parked.fulfill() }
+        let archive = ArchivedSessionsViewModel(server: server, hermes: HermesArchiveSource(
+            connection: record, profile: "default", makeWire: { _ in BotClient(http: connection) }, preferences: defaults
+        ))
+        await archive.load()
+        let row = try XCTUnwrap(archive.sessions.first { $0.sessionId == "s5" })
+
+        let restore = Task { await archive.unarchive(row) }
+        await fulfillment(of: [parked], timeout: 5)
+        await archive.loadMore()
+        HermesHostFixture.script { archived.removeAll { $0 == "s5" } }
+        HermesHostFixture.releaseParked(.json(200, .object(["ok": .bool(true), "title": .null, "archived": .bool(false)])))
+        let restored = await restore.value
+        for _ in 0..<5 where archive.hasMore { await archive.loadMore() }
+
+        XCTAssertTrue(restored)
+        XCTAssertEqual(Set(archive.sessions.compactMap(\.sessionId)), Set(archived))
+        XCTAssertEqual(archive.sessions.count, 200)
+    }
+
     /// A refresh that lands while a restore waits, still listing the row, doesn't bring it
     /// back, before or after the host takes the restore.
     func testARefreshDuringARestoreDoesNotBringTheRowBack() async throws {

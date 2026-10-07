@@ -161,17 +161,17 @@ final class ArchivedSessionsViewModel {
         return HermesSessionChat(server: server, connection: hermes.connection, target: target)
     }
 
-    /// Reads the next page of archived sessions, one at a time. A restore or delete that lands
-    /// meanwhile moves the host's rows, so that page is dropped and the next one reads again.
+    /// Reads the next page of archived sessions, one at a time. A restore or delete moves the
+    /// host's later rows, so no page is read while one is out, and one already out is dropped.
     func loadMore() async {
-        guard hasMore, !isLoadingMore, let wire, let profile = hermesProfile else { return }
+        guard hasMore, !isLoadingMore, unarchivingSessionIDs.isEmpty, deletingSessionIDs.isEmpty,
+              let wire, let profile = hermesProfile else { return }
         let serial = readSerial
-        let offset = pages.nextOffset
         isLoadingMore = true
         defer { if serial == readSerial { isLoadingMore = false } }
         do {
-            let page = try await wire.sessionPage(profile: profile, offset: offset, archived: true)
-            guard serial == readSerial, pages.nextOffset == offset else { return }
+            let page = try await wire.sessionPage(profile: profile, offset: pages.nextOffset, archived: true)
+            guard serial == readSerial else { return }
             var pages = self.pages
             pages.append(page)
             show(pages)
@@ -182,12 +182,14 @@ final class ArchivedSessionsViewModel {
     }
 
     /// Deletes an archived Hermes session through `HermesSessionDeletion`, once the host
-    /// confirms; a busy or held one stays, and the screen says why.
+    /// confirms; a busy or held one stays, and the screen says why. Reads still out when it
+    /// starts or ends are dropped, as a restore's are.
     func delete(_ session: SessionSummary) async -> Bool {
         guard let sessionId = Self.nonEmpty(session.sessionId), !isChanging(session) else { return false }
         deletingSessionIDs.insert(sessionId)
         actionErrorMessage = nil
         defer { deletingSessionIDs.remove(sessionId) }
+        dropReads()
         do {
             guard let wire, let profile = Self.nonEmpty(session.profile) ?? hermesProfile else { throw BotFailure.transport }
             let outcome = try await HermesSessionDeletion.delete(key: sessionId, profile: profile, on: wire)
