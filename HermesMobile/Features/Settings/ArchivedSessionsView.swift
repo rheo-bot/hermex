@@ -62,6 +62,10 @@ struct ArchivedSessionsView: View {
                 default: break
                 }
             }
+            .onChange(of: openedHermesChat == nil) { _, closed in
+                // Back from a chat the background closed this screen's client under.
+                if closed, viewModel.isHermes, !viewModel.isConnected { Task { await load() } }
+            }
             .alert(
                 "Delete Session?",
                 isPresented: Binding(
