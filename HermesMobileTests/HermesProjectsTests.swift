@@ -78,6 +78,42 @@ import Observation
         XCTAssertEqual(pageOffsets(), [0, 100])
     }
 
+    /// The lanes are read after a list read's rows are in. A "Load more" that starts during that
+    /// read keeps paging held until its own page lands, so a second read of the same page can't
+    /// start and end the list early.
+    func testALoadMoreDuringTheLaneReadKeepsPagingHeldUntilItsPageLands() async {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        let firstPage = BotJSON.object(["sessions": .array((0..<100).map { row("s\($0)") })])
+        _ = HermesHostFixture.configuration { request in
+            guard request.httpMethod == "GET", let url = request.url, url.path == "/api/sessions" else { return nil }
+            let offset = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .first { $0.name == "offset" }?.value.flatMap(Int.init) ?? 0
+            return offset == 0 ? .json(200, firstPage) : .park
+        }
+        host.always("projects.tree", .init(result: tree([])))
+        let list = makeList(connection)
+        await list.openHermes()
+
+        host.withhold("projects.tree")
+        let lanesAsked = expectation(description: "the reload reads the lanes")
+        host.expect(lanesAsked, onNext: "projects.tree")
+        let reload = Task { await list.openHermes() }
+        await fulfillment(of: [lanesAsked], timeout: 5)
+        let parked = expectation(description: "the next page is in flight")
+        HermesHostFixture.onPark = { parked.fulfill() }
+        let more = Task { await list.loadMoreHermesSessions() }
+        await fulfillment(of: [parked], timeout: 5)
+        reload.cancel()
+        await reload.value
+
+        XCTAssertTrue(list.isLoadingMoreSessions, "the page read is still in flight")
+        HermesHostFixture.releaseParked(.json(200, .object(["sessions": .array([])])))
+        await more.value
+        XCTAssertFalse(list.isLoadingMoreSessions)
+        XCTAssertEqual(pageOffsets(), [0, 0, 100])
+    }
+
     // MARK: Create, rename, delete
 
     /// New Project sends its name, color and folder, the folder as the primary. A folder another

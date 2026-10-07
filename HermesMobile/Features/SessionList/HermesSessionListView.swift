@@ -213,7 +213,9 @@ struct HermesSessionListView: View {
 
     /// The list's end: the next page loads as it comes into view, or in a lane every page
     /// until the lane is whole, and a tap tries again after a failed one. Keyed by the lane,
-    /// so picking another lane loads its pages too.
+    /// so picking another lane loads its pages too. A lane picked while another page was
+    /// loading starts its own once that page's rows are in; a failed page changes no rows, so
+    /// it never retries on its own.
     private var loadMoreRow: some View {
         Button("Load more") { Task { await loadMore() } }
             .font(.subheadline)
@@ -222,6 +224,10 @@ struct HermesSessionListView: View {
             .frame(maxWidth: .infinity, minHeight: 44)
             .sessionsScreenListRow()
             .onAppear { Task { await loadMore() } }
+            .onChange(of: viewModel.sessions.count) {
+                guard let selectedProjectID else { return }
+                Task { await viewModel.fillHermesLane(selectedProjectID) }
+            }
             .id(selectedProjectID)
     }
 

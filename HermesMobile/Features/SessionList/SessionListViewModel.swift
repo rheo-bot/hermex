@@ -1786,8 +1786,9 @@ final class SessionListViewModel {
         let serial = hermesReadSerial
         let pageSize = HermesREST.sessionPageSize
         let wanted = max(hermesPages.nextOffset + (isLoadingMoreSessions ? pageSize : 0), pageSize)
+        var holdsPaging = true
         defer {
-            if serial == hermesReadSerial {
+            if holdsPaging, serial == hermesReadSerial {
                 isLoading = false
                 if isLoadingMoreSessions { isLoadingMoreSessions = false }
             }
@@ -1800,7 +1801,9 @@ final class SessionListViewModel {
                 pages.append(page)
             }
             applyHermes(pages, readSerial: serial)
-            // The rows are in, and the lanes, read next, never hold them back.
+            // The rows are in, and the lanes, read next, never hold them back. A "Load more"
+            // that starts meanwhile owns the paging flag, so this read lets go of it once.
+            holdsPaging = false
             isLoading = false
             if isLoadingMoreSessions { isLoadingMoreSessions = false }
             startHermesStatusRead(wire)
