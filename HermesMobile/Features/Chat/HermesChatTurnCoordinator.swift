@@ -993,7 +993,7 @@ struct HermesChatTranscript: Equatable {
             toolCalls: message.toolCalls, contentParts: message.contentParts, reasoning: message.reasoning,
             attachments: chips.isEmpty ? message.attachments : (message.attachments ?? []) + chips,
             displayKind: message.displayKind, displayMetadata: message.displayMetadata, turnTps: message.turnTps,
-            turnDuration: message.turnDuration, rowID: message.rowID
+            turnDuration: message.turnDuration, rowID: message.rowID, isCompacted: message.isCompacted
         )
     }
 

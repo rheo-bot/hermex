@@ -5425,10 +5425,12 @@ final class ChatViewModel {
         message.role == "user" && !message.isSteerMessage
     }
 
-    /// A prompt the host can cut at and resend: it has the host's `rowID`, and no attachments,
-    /// which a text-only resend would drop.
+    /// A prompt the host can cut at and resend: it has the host's `rowID`, compaction has not
+    /// archived it (the host cuts only in its live history), and it has no attachments, which a
+    /// text-only resend would drop.
     private nonisolated static func isHermesRewindable(_ prompt: ChatMessage) -> Bool {
-        prompt.rowID != nil && prompt.attachments?.isEmpty != false && !hermesPromptText(prompt).isEmpty
+        prompt.rowID != nil && !prompt.isCompacted && prompt.attachments?.isEmpty != false
+            && !hermesPromptText(prompt).isEmpty
     }
 
     /// A prompt's text as it shows, which a skill turn's host expands again.

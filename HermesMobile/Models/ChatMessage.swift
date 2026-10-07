@@ -32,6 +32,9 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
     /// `id`), set by `HermesTranscriptProjection` (#1047). Nil everywhere else, so
     /// it also tells a Hermes session's settled rows from its live ones.
     let rowID: Int?
+    /// A Hermes session's settled row that compaction archived (the REST row's `active` is 0,
+    /// #1049). It shows above the compaction card, and the host can no longer cut there.
+    let isCompacted: Bool
 
     init(
         role: String?,
@@ -49,7 +52,8 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
         displayMetadata: [String: JSONValue]? = nil,
         turnTps: Double? = nil,
         turnDuration: Double? = nil,
-        rowID: Int? = nil
+        rowID: Int? = nil,
+        isCompacted: Bool = false
     ) {
         self.role = role
         self.content = content
@@ -67,6 +71,7 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
         self.turnTps = turnTps
         self.turnDuration = turnDuration
         self.rowID = rowID
+        self.isCompacted = isCompacted
     }
 
     enum CodingKeys: String, CodingKey {
@@ -112,6 +117,7 @@ struct ChatMessage: Decodable, Equatable, Identifiable {
         turnTps = container.decodeLossyDoubleIfPresent(forKey: .turnTps)
         turnDuration = container.decodeLossyDoubleIfPresent(forKey: .turnDuration)
         rowID = nil
+        isCompacted = false
     }
 
     // MARK: - Steering hints

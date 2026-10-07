@@ -9,11 +9,13 @@ import Observation
 @MainActor final class HermesHistoryRewindTests: XCTestCase {
     // MARK: Menu
 
-    /// A saved prompt offers Edit and its reply Regenerate. A turn whose prompt carried a file,
-    /// or one the host has not saved yet, offers neither, since a text-only resend would drop
-    /// the file and an unsaved row has no id to cut at. Fork From Here waits on #1051.
+    /// A saved prompt offers Edit and its reply Regenerate. A turn the host compacted, a turn
+    /// whose prompt carried a file, or one the host has not saved yet, offers neither: the host
+    /// cuts only at live rows, a text-only resend would drop the file, and an unsaved row has no
+    /// id to cut at. Fork From Here waits on #1051.
     func testTheMenuRewindsOnlyAtSavedPromptsWithoutAttachments() async throws {
         let chat = await openChat([
+            row(5, "user", "Read the logs", active: false), row(6, "assistant", "Read.", active: false),
             row(1, "user", "Summarize the logs"), row(2, "assistant", "Two errors."),
             row(3, "user", "Use these\n\n@file:/a/notes.txt"), row(4, "assistant", "Read them.")
         ])
@@ -22,15 +24,17 @@ import Observation
         chat.receive(event(1, "message.start"))
         chat.receive(event(2, "message.complete", ["status": .string("complete"), "text": .string("Done.")]))
         chat.receive(event(3, "session.info", ["running": .bool(false)]))
-        XCTAssertEqual(chat.model.messages.map(\.content), ["Summarize the logs", "Two errors.", "Use these", "Read them.",
-                                                            "Run it", "Done."])
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Read the logs", "Read.", "Summarize the logs", "Two errors.",
+                                                            "Use these", "Read them.", "Run it", "Done."])
 
-        XCTAssertEqual(try menu(chat, at: 0), [.edit, .copy])
-        XCTAssertEqual(try menu(chat, at: 1), [.listen, .regenerate])
-        XCTAssertEqual(try menu(chat, at: 2), [.copy], "a prompt with a file")
-        XCTAssertEqual(try menu(chat, at: 3), [.listen], "the reply to it")
-        XCTAssertEqual(try menu(chat, at: 4), [.copy], "a prompt the host has not saved")
-        XCTAssertEqual(try menu(chat, at: 5), [.listen])
+        XCTAssertEqual(try menu(chat, at: 0), [.copy], "a compacted prompt")
+        XCTAssertEqual(try menu(chat, at: 1), [.listen], "the compacted reply")
+        XCTAssertEqual(try menu(chat, at: 2), [.edit, .copy])
+        XCTAssertEqual(try menu(chat, at: 3), [.listen, .regenerate])
+        XCTAssertEqual(try menu(chat, at: 4), [.copy], "a prompt with a file")
+        XCTAssertEqual(try menu(chat, at: 5), [.listen], "the reply to it")
+        XCTAssertEqual(try menu(chat, at: 6), [.copy], "a prompt the host has not saved")
+        XCTAssertEqual(try menu(chat, at: 7), [.listen])
     }
 
     /// The discard warning counts the rows after the prompt, so it shows before a cut that
@@ -263,10 +267,12 @@ import Observation
         ).items.map(\.kind)
     }
 
-    /// One display row as the transcript handler returns it.
-    private func row(_ id: Int, _ role: String, _ content: String) -> BotJSON {
+    /// One display row as the transcript handler returns it: a live row, or one compaction
+    /// archived (`active` 0, `compacted` 1).
+    private func row(_ id: Int, _ role: String, _ content: String, active: Bool = true) -> BotJSON {
         .object(["id": .number(Double(id)), "session_id": .string("tip"), "role": .string(role), "content": .string(content),
-                 "timestamp": .number(1_790_000_000 + Double(id)), "active": .number(1), "compacted": .number(0)])
+                 "timestamp": .number(1_790_000_000 + Double(id)), "active": .number(active ? 1 : 0),
+                 "compacted": .number(active ? 0 : 1)])
     }
 
     private func event(_ seq: Int, _ type: String, _ payload: [String: BotJSON] = [:]) -> BotJSON {
