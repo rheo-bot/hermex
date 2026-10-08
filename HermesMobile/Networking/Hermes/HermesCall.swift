@@ -57,6 +57,13 @@ enum HermesCall: Equatable, Sendable {
     /// refuses with 4023 while a runtime in its process holds the session; REST `DELETE` has
     /// no such check, so it is never used.
     case sessionDelete(profile: String, storedKey: String)
+    /// Fork From Here, `/branch` and `/fork` (#1051): copies the session `runtime` runs into a
+    /// new session whose `parent_session_id` is this one, and answers `{session_id, stored_session_id,
+    /// title, parent, message_count, messages, info}`, its `session_id` the branch's own runtime.
+    /// `count` keeps the first rows of the host's visible history (`HermesBranchCount`); without
+    /// it every row is copied. Tool rows never are. `name` titles the branch, else the host takes
+    /// the parent's next title in its lineage. Nothing to copy is 4008; a name in use is 5008.
+    case sessionBranch(runtime: String, name: String?, count: Int?)
     /// Move to Project (#1052): sets that exact stored session's working folder to `cwd` and
     /// answers `{cwd, branch, git_repo_root}`. A runtime on it follows, even mid-turn. A folder
     /// the host lacks is 4017.
@@ -263,6 +270,7 @@ enum HermesCall: Equatable, Sendable {
         case .sessionTitle, .sessionRename: return "session.title"
         case .sessionClose: return "session.close"
         case .sessionDelete: return "session.delete"
+        case .sessionBranch: return "session.branch"
         case .sessionWorkspaceMove: return "session.workspace.move"
         case .projectsTree: return "projects.tree"
         case .projectsCreate: return "projects.create"
@@ -345,6 +353,11 @@ enum HermesCall: Equatable, Sendable {
         case .sessionRename(let runtime, let title): return ["session_id": .string(runtime), "title": .string(title)]
         case .sessionClose(let runtime), .sessionUndo(let runtime): return ["session_id": .string(runtime)]
         case .sessionDelete(let profile, let storedKey): return ["session_id": .string(storedKey), "profile": .string(profile)]
+        case .sessionBranch(let runtime, let name, let count):
+            var params: [String: BotJSON] = ["session_id": .string(runtime)]
+            if let name { params["name"] = .string(name) }
+            if let count { params["count"] = .number(Double(count)) }
+            return params
         case .sessionWorkspaceMove(let profile, let storedKey, let cwd):
             return ["session_key": .string(storedKey), "cwd": .string(cwd), "profile": .string(profile)]
         case .projectsTree(let profile): return ["profile": .string(profile)]
@@ -496,6 +509,8 @@ enum HermesCall: Equatable, Sendable {
         case .sessionRename(let runtime, let title):
             valid = !runtime.isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .sessionDelete(let profile, let storedKey): valid = !profile.isEmpty && !storedKey.isEmpty
+        case .sessionBranch(let runtime, let name, let count):
+            valid = !runtime.isEmpty && name.map(Self.isBlank) != true && (count ?? 1) > 0
         case .sessionWorkspaceMove(let profile, let storedKey, let cwd):
             valid = !profile.isEmpty && !storedKey.isEmpty && !Self.isBlank(cwd)
         case .projectsTree(let profile): valid = !profile.isEmpty

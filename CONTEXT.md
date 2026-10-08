@@ -117,7 +117,7 @@ _Avoid_: tag (for a Hermes project), workspace
 ## Chat
 
 **Fork**:
-A chat created from another chat's history by Fork From Here or `/branch` (`/api/session/branch`). The server marks it `session_source: fork` with a `parent_session_id`, and Hermex shows a "Forked from" row that opens the parent. Agent child sessions (subagents, cron, CLI `/new`) also carry a parent but are not Forks.
+A chat created from another chat's history by Fork From Here or `/branch` (`/api/session/branch`). The server marks it `session_source: fork` with a `parent_session_id`, and Hermex shows a "Forked from" row that opens the parent. Agent child sessions (subagents, cron, CLI `/new`) also carry a parent but are not Forks. On a Hermes host it is `session.branch`'s copy, marked by `_branched_from` in its row's `model_config`; a Hermes Duplicate is an independent copy with no parent, and no Fork.
 _Avoid_: Branch (for the chat), child session
 
 **Conversation target**:

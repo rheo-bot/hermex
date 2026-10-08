@@ -26,7 +26,7 @@ import OSLog
         /// the host was still succeeding. A sign-in provisioning starts gets them too, and so
         /// does a Task's Run Now, which the host answers once the run has finished (#1041), and
         /// Listen's speech, whose first request can install the host's TTS engine (#1072), and a
-        /// session export, which carries every message (#1048).
+        /// session export and import, which carry every message (#1048, #1051).
         case provisioning
     }
 
@@ -39,8 +39,8 @@ import OSLog
     /// a control one chat found missing stays off in every chat on it. Recorded by
     /// `gateway`; a new connection starts empty.
     private(set) var unavailableMethods: Set<String> = []
-    /// Every runtime a `session.resume` on this connection reached and no `session.close` here
-    /// ended (#1048), recorded by `gateway`. The host keeps a runtime after its screen leaves,
+    /// Every runtime a `session.resume` on this connection reached, or a `session.branch` made
+    /// (#1051), and no `session.close` here ended (#1048), recorded by `gateway`. The host keeps a runtime after its screen leaves,
     /// and refuses to delete a session any runtime holds, so a delete closes this phone's own
     /// idle one first. It lasts as long as this connection, past any one socket, as the host's
     /// runtimes do; one the host has since reaped stays here and is never in

@@ -525,6 +525,75 @@ final class APIClientSessionMutationTests: APIClientTestCase {
         XCTAssertEqual(request.url?.query, "profile=research")
     }
 
+    // MARK: Hermes (#1051)
+
+    /// An import posts its body and hands back the host's result. A payload the host refuses
+    /// carries its first error; a 413 stays a status.
+    @MainActor
+    func testHermesImportPostsTheSessionAndCarriesTheHostsRefusal() async throws {
+        var status = 200
+        var posted = BotJSON.null
+        let client = try await hermesClient { request in
+            guard request.url?.path == "/api/sessions/import" else { return nil }
+            posted = Self.hermesBody(request)
+            switch status {
+            case 400:
+                return .json(400, .object(["detail": .object(["ok": .bool(false), "errors": .array([.object([
+                    "index": .number(0), "error": .string("messages[0].role must be a non-empty string"), "session_id": .string("x")
+                ])])])]))
+            case 413: return .json(413, .object(["detail": .string("Session import payload is too large")]))
+            default: return .json(200, .object(["ok": .bool(true), "imported": .number(1), "imported_ids": .array([.string("x")])]))
+            }
+        }
+        let body = BotJSON.object(["sessions": .array([.object(["id": .string("x"), "messages": .array([])])]),
+                                   "profile": .string("research")])
+        let encoded = try JSONEncoder().encode(body)
+
+        let result = try await client.importSessions(body: encoded)
+        XCTAssertEqual(result["imported_ids"], .array([.string("x")]))
+        XCTAssertEqual(posted, body)
+        let request = try XCTUnwrap(HermesHostFixture.requests.first { $0.url?.path == "/api/sessions/import" })
+        XCTAssertEqual(request.httpMethod, "POST")
+
+        status = 400
+        do {
+            _ = try await client.importSessions(body: encoded)
+            XCTFail("The host refused the payload")
+        } catch {
+            XCTAssertEqual(error as? HermesSessionRefusal, HermesSessionRefusal(message: "messages[0].role must be a non-empty string"))
+        }
+        status = 413
+        do {
+            _ = try await client.importSessions(body: encoded)
+            XCTFail("The payload was too large")
+        } catch {
+            XCTAssertEqual(error as? BotFailure, .rejected(413))
+        }
+    }
+
+    /// A session's own row is read under its Profile; a session the host lacks is nil.
+    @MainActor
+    func testHermesSessionRowReadsThatSessionOrNothing() async throws {
+        let row = BotJSON.object(["id": .string("tip"), "parent_session_id": .string("root"),
+                                  "model_config": .string("{\"_branched_from\": \"root\"}")])
+        let client = try await hermesClient { request in
+            switch request.url?.path {
+            case "/api/sessions/tip": return .json(200, row)
+            case "/api/sessions/gone": return .json(404, .object(["detail": .string("Session not found")]))
+            default: return nil
+            }
+        }
+
+        let read = try await client.sessionRow(key: "tip", profile: "research")
+        let gone = try await client.sessionRow(key: "gone", profile: "research")
+
+        XCTAssertEqual(read, row)
+        XCTAssertNil(gone)
+        let request = try XCTUnwrap(HermesHostFixture.requests.first { $0.url?.path == "/api/sessions/tip" })
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.query, "profile=research")
+    }
+
     /// A connected client on a scripted host whose REST routes `answer` serves first.
     @MainActor
     private func hermesClient(_ answer: @escaping (URLRequest) -> HermesHostFixture.Reply?) async throws -> BotClient {

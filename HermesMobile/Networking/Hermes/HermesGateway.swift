@@ -197,7 +197,8 @@ import OSLog
             Task { @MainActor [weak self] in self?.cancel(id, generation: owner, safely: cancellationSafe) }
         }
         switch call {
-        case .sessionResume:
+        // A branch's reply names the runtime the host made for it (#1051).
+        case .sessionResume, .sessionBranch:
             if let runtime = reply["session_id"].text, !runtime.isEmpty { http.noteAttached(runtime) }
         case .sessionClose(let runtime): http.noteClosed(runtime)
         default: break
@@ -483,8 +484,9 @@ private extension HermesCall {
     /// says what was wrong with it (#1013), a refused slash command (#1036), a refused
     /// `/title`, whose 4022 message names the session already using it (#1048), a refused
     /// rewind or `/undo`, whose 5008 message says why the host could not write the cut (#1049),
-    /// a refused `/compress`, whose 5005 message says why the compaction failed (#1050), and a
-    /// refused project change or move, such as 5063 naming the project that has the folder (#1052).
+    /// a refused `/compress`, whose 5005 message says why the compaction failed (#1050), a
+    /// refused project change or move, such as 5063 naming the project that has the folder (#1052),
+    /// and a refused branch, whose 5008 message names the session using its name (#1051).
     var rejection: Rejection {
         if method.hasPrefix("groups.") { return .room }
         switch self {
@@ -492,7 +494,7 @@ private extension HermesCall {
              .sessionControlRead: return .setting
         case .commandDispatch(let name, _, _) where name == "goal": return .setting
         case .slashExec, .sessionRename, .promptRewind, .sessionUndo, .sessionCompress, .sessionWorkspaceMove,
-             .projectsCreate, .projectsUpdate, .projectsDelete: return .setting
+             .projectsCreate, .projectsUpdate, .projectsDelete, .sessionBranch: return .setting
         default: return .plain
         }
     }

@@ -352,8 +352,7 @@ history lock. Edit sends the edited text; Regenerate and `/retry` (the last prom
 prompt as it shows, so a `/skill` turn resends its typed line, which the host expands again.
 They are offered only at a prompt the host saved (it has a `rowID`) in its live history (a row
 compaction archived, REST `active: 0`, is never found and always 4018) with no attachments,
-since a text-only resend would drop them, and on the replies after it; Fork From Here waits on
-#1051.
+since a text-only resend would drop them, and on the replies after it.
 Once the host answers `streaming`, the prompt shows where the cut was, the cut rows and their
 cards go, and the turn's end re-reads the newest rows. The dropped rows are soft-archived
 (`active=0`): no client shows them again and no call restores them, so the discard warning says
@@ -363,6 +362,28 @@ exchange. 4009 (busy) asks to wait, 4018 (a row cut elsewhere) says
 the message can't be changed, and any other refusal shows the host's message (5008 is a failed
 write). Each is sent once: a lost or unreadable answer holds Send and reattaches, whose rebuild
 shows what the host did (#508). A failed edit's text goes back to the composer, after any draft.
+
+Fork From Here, `/branch [name]` and `/fork [name]` branch the session (#1051):
+`session.branch {session_id: <runtime>, name?, count?}` (`HermesCall.sessionBranch`, sent once)
+copies the host's visible history into a new session whose `parent_session_id` is this one, with
+`{"_branched_from": <parent>}` as its `model_config`, and answers its `stored_session_id` and a
+runtime of its own, which counts as this phone's for a later delete. The branch opens on top of
+the chat; this chat is unchanged. Tool rows are never copied, as on Desktop. `count` keeps the
+first rows of the host's display projection whose role is user or assistant and whose content has
+text, compacted rows and the hidden compaction summary included (`HermesBranchCount`, checked
+against `scripts/local-hermes` on both sides of an in-place compaction and after tool turns), so
+Fork From Here reads every older page first and counts from the first row through the chosen one;
+it is offered on any row the host saved (`rowID`). `/branch` copies everything, under its name or
+the parent's next lineage title. 4008 (nothing to copy yet) asks to send first; any other refusal,
+such as a name in use (5008), shows the host's message. A legacy compression chain's ancestors are
+in the host's projection but not in its tip's pages, so a fork there would end early; in-place
+compaction, the default at the pin, has none.
+
+A branch shows a "Forked from <parent>" row (`ForkOrigin`) that opens the parent. A chat opened
+from a row naming a parent (`HermesSessionChat.parentKey`) reads its own row,
+`GET /api/sessions/{id}?profile=`, and only a `_branched_from` naming that parent counts: a reset
+continuation also has a parent. The parent's row then gives its title. Each row read is the whole
+stored row, about 60 KB, so a chat opened without a parent reads none.
 Checked against `scripts/local-hermes` at the `HERMES_AGENT_TESTED_SHA` pin (`ca678285`,
 0.21.5): a cut answers `{status: "streaming", user_row_id, survivor_user_row_ids}` and its rows
 leave the REST page; a cut row is 4018 afterwards; a running turn refuses both calls with 4009;
@@ -1198,10 +1219,9 @@ inbox stops on (`BotConnectionAdvice.isRetryable`); pull to refresh tries again.
 
 ### Row actions (#1048)
 
-A Hermes row's menu and swipes rename, pin, archive, delete and Export as JSON
-(`SessionRowActionPolicy`), and Move to Project (below). Duplicate waits on a later slice of
-#702; the host has no HTML export, and Hermes deep links are #706. Each action goes to the row's
-own Profile.
+A Hermes row's menu and swipes rename, pin, archive, delete, duplicate and Export as JSON
+(`SessionRowActionPolicy`), and Move to Project (below). The host has no HTML export, and Hermes
+deep links are #706. Each action goes to the row's own Profile.
 
 - **Pin, archive and rename** are `PATCH /api/sessions/{id}` with one field and `profile` in
   the body (`HermesSessionChange`). `pinned` and `archived` apply across the compression
@@ -1222,6 +1242,19 @@ own Profile.
 - **Export as JSON** is `GET /api/sessions/{id}/export?profile=`: the session row with every
   message, unredacted (system prompt and host paths included), written to a temp file named
   after the title and offered in the share sheet.
+- **Duplicate** (#1051) is that export, imported again as an independent copy
+  (`HermesSessionDuplication`), tool output, reasoning and timestamps included;
+  `session.branch_stored` would keep only user and assistant text. The copy takes a new id in
+  the host's shape (`YYYYMMDD_HHMMSS_<6 hex>`), drops `parent_session_id`, `_lineage_*`,
+  `timings` and each message's `id`, and goes in untitled, neither archived nor pinned:
+  `POST /api/sessions/import {sessions: [copy], profile}` answers `{ok, imported, skipped,
+  imported_ids, …}`, skips an id the Profile has, refuses a bad payload whole (400), and fails
+  the whole import on a title in use, hence untitled. Then `PATCH {title}` names it "<title>
+  (copy)", "(copy 2)" and on while the host has the title (at most 10 tries); a copy it won't
+  title stays untitled. Past the host's limits (10,000 messages or 5 MB per session; 413 past
+  25 MB) it says "too large to duplicate" and nothing is imported. The copy opens, and sorts by
+  its messages' timestamps. Only the export's live rows are copied: a compacted session's copy
+  starts at its summary.
 - **Archived Sessions**, at the list's end and in Settings, is `ArchivedSessionsView` with a
   `HermesArchiveSource`: `GET /api/sessions?profile=&order=recent&archived=only&limit=100&offset=&exclude_sources=…`
   (no `min_messages`), paged as the list is. The hidden filter is off there, so archived
@@ -1880,9 +1913,10 @@ Send resolves a draft that opens with `/name` in this order:
    (#1050) compress and start a new chat as above. `/sessions` and a bare `/resume`
    (#1053) go back to the Sessions list under the chat, or push one in the chat's
    Profile; `/resume <name>` opens the one session the list's search finds titled exactly
-   `<name>` (ignoring case), and otherwise the list searching `<name>`.
-2. **Held until a later slice of #702** (`hermesHeldNames`): `/branch` and `/fork`. They
-   move between chats, so they show a notice naming #702 and send nothing.
+   `<name>` (ignoring case), and otherwise the list searching `<name>`. `/branch` and `/fork`
+   (#1051) branch the whole session as above.
+2. **Held until a later slice of #702** (`hermesHeldNames`): commands that would move between
+   chats behind the phone's back show a notice naming #702 and send nothing. None is held now.
 3. **A catalog skill**: `command.dispatch` expands it and `message` is submitted.
 4. **Any other catalog command or alias**: `slash.exec {session_id, command}`
    with the typed line, once.

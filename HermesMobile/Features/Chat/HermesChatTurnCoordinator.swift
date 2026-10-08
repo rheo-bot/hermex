@@ -46,6 +46,10 @@ struct HermesSessionChat: Hashable, Identifiable {
     let server: URL
     let connection: BotConnection
     let target: ConversationTarget
+    /// The session the row this chat opened from names as its parent (`parent_session_id`): the
+    /// chat asks the host whether it is a branch of it, for its "Forked from" row (#1051). Nil
+    /// asks nothing.
+    var parentKey: String? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -254,6 +258,9 @@ struct HermesChatTranscript: Equatable {
         let underlying: Error
         var duringUpload = false
     }
+
+    /// A branch's row is no longer in the history, so it can't be counted to (#1051).
+    struct BranchRowGone: Error {}
 
     /// The rows the host saved for a turn, from `message.complete`'s `persisted_turn`.
     struct SavedTurn: Equatable {
@@ -597,6 +604,38 @@ struct HermesChatTranscript: Equatable {
     /// A reply's text, or nil when it is missing or blank.
     private static func words(_ value: BotJSON) -> String? {
         value.text.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    }
+
+    // MARK: Branches
+
+    /// Fork From Here, `/branch` and `/fork` (#1051): `session.branch` on the runtime, sent once,
+    /// and the new session's stored key. Through `rowID`, the branch keeps the history up to that
+    /// saved row: the host counts from the session's first row (`HermesBranchCount`), so every
+    /// older page is read first. Without it, the branch copies the whole history, under `name`
+    /// when given. This chat's history is unchanged. Throws `NotSent` when it never went out,
+    /// `BranchRowGone` for a row the history no longer holds, and the host's refusal as
+    /// `BotSettingFailure`.
+    func branch(through rowID: Int?, name: String?) async throws -> String {
+        await activate()
+        guard engine.connectionState == .connected, let runtime = engine.runtime else {
+            throw NotSent(underlying: BotFailure.transport)
+        }
+        var count: Int?
+        if let rowID {
+            // A page that adds nothing has the newest rows read again first, so one may stall.
+            var stalled = false
+            while history.hasOlder {
+                let held = history.rows.count
+                _ = await loadOlderHistory()
+                guard history.rows.count > held || !history.hasOlder || !stalled else { throw NotSent(underlying: BotFailure.transport) }
+                stalled = history.rows.count == held
+            }
+            guard let through = HermesBranchCount.count(through: rowID, in: history.rows) else { throw BranchRowGone() }
+            count = through
+        }
+        let reply = try await writeOnce(.sessionBranch(runtime: runtime, name: name, count: count), runtime: runtime)
+        guard let key = reply["stored_session_id"].text, !key.isEmpty else { throw BotFailure.unsupported }
+        return key
     }
 
     /// One history write on `runtime`, sent once. Throws `NotSent` when it never went out; a

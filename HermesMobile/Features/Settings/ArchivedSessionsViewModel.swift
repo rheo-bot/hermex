@@ -160,9 +160,8 @@ final class ArchivedSessionsViewModel {
 
     /// The Hermes session a row opens, in the row's Profile.
     func hermesChat(for session: SessionSummary) -> HermesSessionChat? {
-        guard let hermes, let profile = hermesProfile,
-              let target = session.hermesTarget(listedIn: profile) else { return nil }
-        return HermesSessionChat(server: server, connection: hermes.connection, target: target)
+        guard let hermes, let profile = hermesProfile else { return nil }
+        return session.hermesChat(on: server, connection: hermes.connection, listedIn: profile)
     }
 
     /// Reads the next page of archived sessions, one at a time. A restore or delete moves the

@@ -19,7 +19,8 @@ struct HermesSessionListEntry: Hashable, Identifiable {
 /// stack (from the inbox's + menu until #709), so it brings no navigation container of its own,
 /// and a row opens in the main chat on top of it. Its socket listens while it is on screen, rests
 /// while a chat covers it, and closes when it leaves or the app goes to the background. Rows
-/// rename, pin, archive (with Undo and an Archived screen), delete and export as JSON (#1048).
+/// rename, pin, archive (with Undo and an Archived screen), delete and export as JSON (#1048), and
+/// duplicate (#1051).
 /// Its project rows are the host's folder-based project lanes (#1052): a pick filters the list to
 /// one lane, and a row's Move to Project changes the session's working folder. Its search (#1053)
 /// filters the loaded rows at once and then adds the host's matches, which reach past the loaded
@@ -311,7 +312,7 @@ struct HermesSessionListView: View {
     }
 
     /// Opening a row, Mark as Read or Unread, and the row actions `SessionRowActionPolicy`
-    /// offers a Hermes row; Duplicate waits on a later slice of #702. Move to Project asks first,
+    /// offers a Hermes row; Duplicate opens the copy (#1051). Move to Project asks first,
     /// and its New Project starts on the session's folder, then asks to move it there if it
     /// was saved on another. A bot's Bot Chat, which only a search lists, opens in that bot
     /// through the app's bot route, as a notification's tap does (#1053).
@@ -323,9 +324,9 @@ struct HermesSessionListView: View {
                     AppIntentRouter.shared.requestDeepLink(HermesDeepLink.botURL(for: bot))
                     return
                 }
-                guard let target = session.hermesTarget(listedIn: profile) else { return }
+                guard let opened = session.hermesChat(on: entry.server, connection: entry.connection, listedIn: profile) else { return }
                 viewModel.beginViewing(session)
-                chat = HermesSessionChat(server: entry.server, connection: entry.connection, target: target)
+                chat = opened
             },
             toggleUnread: { viewModel.toggleUnread($0) },
             togglePinned: { session in Task { await togglePinned(session) } },
@@ -335,7 +336,7 @@ struct HermesSessionListView: View {
                 viewModel.clearRenameError()
                 renaming = session
             },
-            duplicate: { _ in },
+            duplicate: { session in Task { await duplicate(session) } },
             move: { session, projectID in
                 guard let project = viewModel.projects.first(where: { $0.projectId == projectID }),
                       let folder = project.hermes?.folder else { return }
@@ -389,6 +390,13 @@ struct HermesSessionListView: View {
             actionTitle: String(localized: "Undo"),
             action: { Task { _ = await viewModel.moveHermesSession(move.session, toFolder: previous) } }
         ))
+    }
+
+    /// Opens the copy once the host has it (#1051).
+    private func duplicate(_ session: SessionSummary) async {
+        guard let copy = await viewModel.duplicate(session),
+              let opened = copy.hermesChat(on: entry.server, connection: entry.connection, listedIn: profile) else { return }
+        chat = opened
     }
 
     private func delete(_ session: SessionSummary) async {
@@ -447,6 +455,14 @@ extension SessionSummary {
     func hermesTarget(listedIn profile: String) -> ConversationTarget? {
         guard hermes != nil, let key = sessionId, !key.isEmpty else { return nil }
         return .session(profile: self.profile.flatMap { $0.isEmpty ? nil : $0 } ?? profile, key: key)
+    }
+
+    /// The chat this Hermes row opens on `connection`, carrying the parent the row names, so a
+    /// branch shows its "Forked from" row (#1051). Nil for a webui row.
+    func hermesChat(on server: URL, connection: BotConnection, listedIn profile: String) -> HermesSessionChat? {
+        hermesTarget(listedIn: profile).map {
+            HermesSessionChat(server: server, connection: connection, target: $0, parentKey: parentSessionId)
+        }
     }
 
     /// The bot whose Bot Chat this row is (#1053): the Sessions list opens it there, so one chat

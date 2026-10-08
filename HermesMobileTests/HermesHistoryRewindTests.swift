@@ -12,7 +12,7 @@ import Observation
     /// A saved prompt offers Edit and its reply Regenerate. A turn the host compacted, a turn
     /// whose prompt carried a file, or one the host has not saved yet, offers neither: the host
     /// cuts only at live rows, a text-only resend would drop the file, and an unsaved row has no
-    /// id to cut at. Fork From Here waits on #1051.
+    /// id to cut at. Every saved row offers Fork From Here, which copies compacted rows too (#1051).
     func testTheMenuRewindsOnlyAtSavedPromptsWithoutAttachments() async throws {
         let chat = await openChat([
             row(5, "user", "Read the logs", active: false), row(6, "assistant", "Read.", active: false),
@@ -27,12 +27,12 @@ import Observation
         XCTAssertEqual(chat.model.messages.map(\.content), ["Read the logs", "Read.", "Summarize the logs", "Two errors.",
                                                             "Use these", "Read them.", "Run it", "Done."])
 
-        XCTAssertEqual(try menu(chat, at: 0), [.copy], "a compacted prompt")
-        XCTAssertEqual(try menu(chat, at: 1), [.listen], "the compacted reply")
-        XCTAssertEqual(try menu(chat, at: 2), [.edit, .copy])
-        XCTAssertEqual(try menu(chat, at: 3), [.listen, .regenerate])
-        XCTAssertEqual(try menu(chat, at: 4), [.copy], "a prompt with a file")
-        XCTAssertEqual(try menu(chat, at: 5), [.listen], "the reply to it")
+        XCTAssertEqual(try menu(chat, at: 0), [.fork, .copy], "a compacted prompt")
+        XCTAssertEqual(try menu(chat, at: 1), [.listen, .fork], "the compacted reply")
+        XCTAssertEqual(try menu(chat, at: 2), [.edit, .fork, .copy])
+        XCTAssertEqual(try menu(chat, at: 3), [.listen, .regenerate, .fork])
+        XCTAssertEqual(try menu(chat, at: 4), [.fork, .copy], "a prompt with a file")
+        XCTAssertEqual(try menu(chat, at: 5), [.listen, .fork], "the reply to it")
         XCTAssertEqual(try menu(chat, at: 6), [.copy], "a prompt the host has not saved")
         XCTAssertEqual(try menu(chat, at: 7), [.listen])
     }

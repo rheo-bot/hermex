@@ -63,8 +63,8 @@ import Observation
         XCTAssertEqual(slash.route("clear").appOwnedHandler, .clientSide(.clear), "#1050")
         XCTAssertEqual(slash.route("sessions").appOwnedName, "sessions", "#1053")
         XCTAssertEqual(slash.route("resume").appOwnedName, "resume", "#1053")
-        XCTAssertEqual(slash.route("branch"), .held)
-        XCTAssertEqual(slash.route("fork"), .held)
+        XCTAssertEqual(slash.route("branch"), .appOwned(SlashCommandCatalog.command(named: "branch")!), "#1051")
+        XCTAssertEqual(slash.route("fork"), .appOwned(SlashCommandCatalog.command(named: "fork")!), "#1051")
         XCTAssertEqual(slash.route("demo-skill").isSkill, true)
         XCTAssertEqual(slash.route("context"), .host)
         XCTAssertEqual(slash.route("ctx"), .host)
@@ -84,14 +84,6 @@ import Observation
         XCTAssertEqual(chat.writes("prompt.submit"), [])
         XCTAssertEqual(chat.model.messages.map(\.role), ["local_notice"])
         XCTAssertEqual(chat.model.messages.map(\.content), ["```text\nhermex-quick\n```"])
-    }
-
-    func testAHeldCommandShowsTheNoticeAndSendsNothing() async {
-        let chat = await openChat()
-        let result = await chat.model.runHermesSlashCommand("/branch")
-        XCTAssertEqual(result, .unsupported(friendlyMessage: "Hermex can't run /branch in a Hermes chat yet (#702)."))
-        XCTAssertEqual(chat.writes("slash.exec"), [])
-        XCTAssertEqual(chat.writes("prompt.submit"), [])
     }
 
     /// `/title` renames the session on its runtime (#1048), never through `slash.exec`, and the

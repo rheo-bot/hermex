@@ -104,6 +104,59 @@ enum HermesNewestCoverage: Equatable {
     case from(rowIDs: [Int])
 }
 
+/// Fork From Here's `count` for `session.branch` (#1051): the host keeps the first `count` rows
+/// of its visible history, the user and assistant rows of its display projection whose content
+/// has text (`_visible_branch_history`, `tui_gateway/methods_session.py`). A transcript page is
+/// that projection, so the count is the rows from the session's first one through the chosen
+/// one that pass the same test. Compacted rows and the hidden compaction summary count, and
+/// tool rows never do: on `scripts/local-hermes` at the pin, a branch counted this way ended at
+/// the chosen row after tool turns and on both sides of an in-place compaction.
+enum HermesBranchCount {
+    /// The count through row `rowID` of `rows`, which must run from the session's first row;
+    /// nil when no such row is there, or it is one the host never copies.
+    static func count(through rowID: Int, in rows: [BotJSON]) -> Int? {
+        var count = 0
+        for row in rows {
+            let counts = copies(row)
+            if counts { count += 1 }
+            if HermesTranscriptHistory.id(row) == rowID { return counts ? count : nil }
+        }
+        return nil
+    }
+
+    private static func copies(_ row: BotJSON) -> Bool {
+        guard let role = row["role"].text, role == "user" || role == "assistant" else { return false }
+        return hasText(row["content"])
+    }
+
+    /// Whether `content` has text as the host reads it (`_coerce_message_text`): a string, a
+    /// part's text, or any other typed part, such as an image, which reads as a mark like `[image]`.
+    private static func hasText(_ content: BotJSON) -> Bool {
+        switch content {
+        case .string(let text): return isText(text)
+        case .array(let parts):
+            return parts.contains { part in
+                if let text = part.text ?? part["text"].text { return isText(text) }
+                return part["type"].text.map { objectHasText(part, kind: $0) } ?? false
+            }
+        case .object: return objectHasText(content, kind: content["type"].text)
+        case .null: return false
+        case .number, .bool: return true
+        }
+    }
+
+    /// `_history_dict_text`: a text kind's own text, a mark for any other kind, and an untyped
+    /// object's `text`, else a mark too.
+    private static func objectHasText(_ object: BotJSON, kind: String?) -> Bool {
+        guard let kind else { return object.fields?["text"].map { isText($0.text) } ?? true }
+        return !["text", "input_text", "output_text"].contains(kind) || isText(object["text"].text ?? object["content"].text)
+    }
+
+    private static func isText(_ text: String?) -> Bool {
+        text?.contains { !$0.isWhitespace } == true
+    }
+}
+
 /// Where a compacted Hermes session's "Context compaction · Reference only" card sits (#1047):
 /// right after `anchorMessageID`, the last message before the host's summary row, or above the
 /// rows loaded when none precedes it. The rows before it are the compacted turns.

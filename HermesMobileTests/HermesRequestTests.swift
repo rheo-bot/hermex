@@ -50,6 +50,10 @@ final class HermesRequestTests: XCTestCase {
             (.sessionClose(runtime: "runtime"), "session.close", ["session_id": .string("runtime")]),
             (.sessionDelete(profile: "triage", storedKey: "tip"), "session.delete",
              ["session_id": .string("tip"), "profile": .string("triage")]),
+            (.sessionBranch(runtime: "runtime", name: nil, count: 6), "session.branch",
+             ["session_id": .string("runtime"), "count": .number(6)]),
+            (.sessionBranch(runtime: "runtime", name: "Experiment", count: nil), "session.branch",
+             ["session_id": .string("runtime"), "name": .string("Experiment")]),
             (.sessionWorkspaceMove(profile: "triage", storedKey: "tip", cwd: "/work"), "session.workspace.move",
              ["session_key": .string("tip"), "cwd": .string("/work"), "profile": .string("triage")]),
             (.projectsTree(profile: "triage"), "projects.tree", ["profile": .string("triage")]),
@@ -169,8 +173,12 @@ final class HermesRequestTests: XCTestCase {
         }
     }
 
-    /// A rename needs a runtime and a title, and a delete names its Profile and stored key (#1048).
+    /// A rename needs a runtime and a title, and a delete names its Profile and stored key (#1048);
+    /// a branch names its runtime, and any name or count it carries is real (#1051).
     func testSessionLifecycleCallsRefuseAnEmptyTarget() {
+        XCTAssertThrowsError(try HermesCall.sessionBranch(runtime: "", name: nil, count: nil).params())
+        XCTAssertThrowsError(try HermesCall.sessionBranch(runtime: "runtime", name: " \n", count: nil).params())
+        XCTAssertThrowsError(try HermesCall.sessionBranch(runtime: "runtime", name: nil, count: 0).params())
         XCTAssertThrowsError(try HermesCall.sessionRename(runtime: "runtime", title: " \n").params())
         XCTAssertThrowsError(try HermesCall.sessionRename(runtime: "", title: "Plan").params())
         XCTAssertThrowsError(try HermesCall.sessionClose(runtime: "").params())
@@ -232,6 +240,8 @@ final class HermesRequestTests: XCTestCase {
     func testEveryRESTRequestKeepsItsMethodPathQueryAndBody() throws {
         let base = URL(string: "https://hermes.example:9120")!
         let json = ["Content-Type": "application/json"]
+        let imported = BotJSON.object(["sessions": .array([.object(["id": .string("20261008_002420_fb927d")])]),
+                                       "profile": .string("triage")])
         let cases: [(HermesREST, String, String, BotJSON?, [String: String])] = [
             (.status, "GET", "https://hermes.example:9120/api/status", nil, [:]),
             (.login(username: "user", password: "pass"), "POST", "https://hermes.example:9120/auth/password-login",
@@ -266,6 +276,9 @@ final class HermesRequestTests: XCTestCase {
              "https://hermes.example:9120/api/sessions/tip", .object(["title": .string("Plan"), "profile": .string("triage")]), json),
             (.sessionExport(key: "tip", profile: "triage"), "GET",
              "https://hermes.example:9120/api/sessions/tip/export?profile=triage", nil, [:]),
+            (.sessionRow(key: "tip", profile: "triage"), "GET", "https://hermes.example:9120/api/sessions/tip?profile=triage", nil, [:]),
+            (.importSessions(body: try JSONEncoder().encode(imported)), "POST", "https://hermes.example:9120/api/sessions/import",
+             imported, json),
             (.cronJobs, "GET", "https://hermes.example:9120/api/cron/jobs", nil, [:]),
             (.cronCreate(profile: "research", fields: ["schedule": .string("0 9 * * *")]), "POST",
              "https://hermes.example:9120/api/cron/jobs?profile=research", .object(["schedule": .string("0 9 * * *")]), json),
@@ -348,6 +361,7 @@ final class HermesRequestTests: XCTestCase {
         XCTAssertThrowsError(try HermesREST.sessionMessages(key: "../profiles", profile: "triage").request(base: base))
         XCTAssertThrowsError(try HermesREST.sessionMessages(key: "bg_1", profile: "").request(base: base))
         XCTAssertThrowsError(try HermesREST.speak(text: "Hi.", profile: "").request(base: base))
+        XCTAssertThrowsError(try HermesREST.sessionRow(key: "../profiles", profile: "triage").request(base: base))
         XCTAssertThrowsError(try HermesREST.cronPause(id: "../profiles", profile: "research").request(base: base))
         XCTAssertThrowsError(try HermesREST.cronDelete(id: "", profile: "research").request(base: base))
         XCTAssertThrowsError(try HermesCall.profileModelOptions(profile: "").params())

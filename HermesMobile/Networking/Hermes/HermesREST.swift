@@ -66,6 +66,12 @@ import Foundation
 /// The search (#1053) is read at the same pin and checked against `scripts/local-hermes`:
 /// `{results: [...]}`, an empty `q` answers none, and a Profile the host lacks is 404 `{detail}`;
 /// `HermesSessionSearch` has the result's fields.
+/// A session's own row and the session import (#1051) are read at the same pin and checked against
+/// `scripts/local-hermes`: the row is the stored one, flags as 0/1, `model_config` a JSON string
+/// (`{"_branched_from": <parent>}` on a branch), and system prompt and tool names included, about
+/// 60 KB; an import answers `{ok, imported, skipped, detached, imported_ids, skipped_ids, errors}`,
+/// skips an id the Profile has, refuses a payload with 400 `{detail: {errors}}` before writing
+/// anything, and answers 413 past 25 MB.
 enum HermesREST: Equatable, Sendable {
     /// The most rows `GET /api/sessions` lists in one page.
     static let sessionPageSize = 100
@@ -119,6 +125,12 @@ enum HermesREST: Equatable, Sendable {
     case updateSession(key: String, profile: String, change: HermesSessionChange)
     /// That exact session's row and every message, unredacted, as one JSON object (#1048).
     case sessionExport(key: String, profile: String)
+    /// That exact session's stored row (#1051), or 404 `{detail}` when `profile` has none.
+    case sessionRow(key: String, profile: String)
+    /// Imports sessions as an export holds them (#1051), each under the id it carries. `body` is
+    /// the JSON `{sessions, profile}`, encoded by the caller off the main actor: it carries every
+    /// message.
+    case importSessions(body: Data)
     /// `profile`'s sessions matching `query` (#1053): id matches, then message-content matches,
     /// at most `sessionSearchLimit`, archived and hidden ones included, without machine-run rows.
     case sessionSearch(query: String, profile: String)
@@ -322,6 +334,14 @@ enum HermesREST: Equatable, Sendable {
         case .sessionExport(let key, let profile):
             guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
             return Self.get(try Self.url(base, "api/sessions/\(key)/export", profile: profile))
+        case .sessionRow(let key, let profile):
+            guard Self.isSegment(key), !profile.isEmpty else { throw BotFailure.invalidAddress }
+            return Self.get(try Self.url(base, "api/sessions/\(key)", profile: profile))
+        case .importSessions(let body):
+            var request = Self.bare("POST", base.appendingPathComponent("api/sessions/import"))
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            return request
         case .sessionSearch(let query, let profile):
             guard !query.isEmpty, !profile.isEmpty,
                   var parts = URLComponents(url: base.appendingPathComponent("api/sessions/search"), resolvingAgainstBaseURL: false)

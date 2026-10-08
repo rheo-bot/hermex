@@ -3118,14 +3118,16 @@ final class SessionListMutationTests: XCTestCase {
         XCTAssertTrue(requestedPaths.isEmpty)
     }
 
-    /// A Hermes row (#1048) offers pin, rename, archive, delete, Export as JSON and Move to Project
-    /// (#1052). Duplicate waits on a later slice of #702; the host has no HTML export, and Hermes
-    /// deep links are #706.
-    func testAHermesRowOffersItsActionsButNotDuplicateHTMLOrDeeplink() {
+    /// A Hermes row (#1048) offers pin, rename, archive, delete, Export as JSON, Move to Project
+    /// (#1052) and Duplicate (#1051), but a bot's Bot Chat no Duplicate; the host has no HTML
+    /// export, and Hermes deep links are #706.
+    func testAHermesRowOffersItsActionsButNotHTMLOrDeeplink() {
         let row = HermesSessionRow(id: "20261005_101500_a1b2c3").summary(in: "default")
 
         XCTAssertTrue(SessionRowActionPolicy.offersMutationActions(for: row))
-        XCTAssertFalse(SessionRowActionPolicy.canDuplicate(row))
+        XCTAssertTrue(SessionRowActionPolicy.canDuplicate(row))
+        XCTAssertFalse(SessionRowActionPolicy.canDuplicate(
+            HermesSessionRow(id: "bot", title: HermesCall.botChatTitle, hidden: true).summary(in: "default")))
         XCTAssertTrue(SessionRowActionPolicy.offersProjectMove(for: row))
         XCTAssertEqual(SessionRowActionPolicy.exportFormats(for: row), [.json])
         XCTAssertNil(SessionRowActionPolicy.deepLinkURL(for: row, isViewingCachedData: false, isMutating: false))

@@ -181,6 +181,41 @@ import Foundation
         return data
     }
 
+    func sessionRow(key: String, profile: String) async throws -> BotJSON? {
+        guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
+        let attempt = self.attempt
+        let data: Data
+        do {
+            data = try await http.data(.sessionRow(key: key, profile: profile), validateDispatch: { try self.checkOwner(attempt) })
+        } catch BotFailure.rejected(404) {
+            try checkOwner(attempt)
+            return nil
+        }
+        try checkOwner(attempt)
+        guard let row = try? JSONDecoder().decode(BotJSON.self, from: data), row.fields != nil else { throw BotFailure.unsupported }
+        return row
+    }
+
+    /// A refused payload's reason is the host's `detail`: its text, or the first of its
+    /// `errors`, one per session it refused.
+    func importSessions(body: Data) async throws -> BotJSON {
+        guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
+        let attempt = self.attempt
+        let reply = try await http.reply(.importSessions(body: body), deadline: .provisioning,
+                                         validateDispatch: { try self.checkOwner(attempt) })
+        try checkOwner(attempt)
+        let body = try? JSONDecoder().decode(BotJSON.self, from: reply.body)
+        guard reply.status == 200 else {
+            let detail = body?["detail"].text ?? body?["detail"]["errors"].list?.first?["error"].text
+            if reply.status == 400, let detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+                throw HermesSessionRefusal(message: detail)
+            }
+            throw BotFailure.rejected(reply.status)
+        }
+        guard let body, body.fields != nil else { throw BotFailure.unsupported }
+        return body
+    }
+
     func searchSessions(query: String, profile: String) async throws -> [HermesSessionSearchResult] {
         guard gateway.isAttached(consumerID) else { throw BotFailure.stale }
         let attempt = self.attempt

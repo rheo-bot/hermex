@@ -1193,6 +1193,7 @@ final class SessionListViewModel {
             return nil
         }
 
+        if session.hermes != nil { return await duplicateHermesSession(session) }
         guard beginSessionMutation(sessionId) else { return nil }
         defer { endSessionMutation(sessionId) }
 
@@ -2308,6 +2309,27 @@ final class SessionListViewModel {
         } catch {
             if !Task.isCancelled, error as? BotFailure != .stale { renameErrorMessage = hermesActionFailure(error) }
             return false
+        }
+    }
+
+    /// Duplicates a row through `HermesSessionDuplication` and returns the copy as a row to open,
+    /// titled after the row as it shows; the list reads again. Nil after saying why.
+    private func duplicateHermesSession(_ session: SessionSummary) async -> SessionSummary? {
+        guard let target = hermesTarget(session), beginSessionMutation(target.key) else { return nil }
+        let (wire, key, profile) = target
+        defer { endSessionMutation(key) }
+        actionErrorMessage = nil
+        do {
+            let copy = try await HermesSessionDuplication.duplicate(key: key, profile: profile, title: SessionRowView.displayTitle(for: session),
+                                                                   on: wire)
+            requestHermesReload()
+            return HermesSessionRow(id: copy.key, title: copy.title, profile: profile).summary(in: profile)
+        } catch BotFailure.unsupported {
+            actionErrorMessage = String(localized: "The server did not return the duplicated session.")
+            return nil
+        } catch {
+            if !Task.isCancelled { showHermesActionFailure(error) }
+            return nil
         }
     }
 

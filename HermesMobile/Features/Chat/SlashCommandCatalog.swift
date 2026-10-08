@@ -218,10 +218,11 @@ enum SlashCommandCatalog {
     /// `/title` is `session.title` on the chat's runtime (#1048); `/retry` and `/undo` rewind
     /// the session's history as Regenerate does (#1049); `/compress` and `/compact` are
     /// `session.compress`, and `/clear` opens a new chat in this one's place (#1050). `/sessions`
-    /// and `/resume` open the Sessions list, or a session by its title (#1053).
+    /// and `/resume` open the Sessions list, or a session by its title (#1053). `/branch` and
+    /// `/fork` are `session.branch`, and open the branch on top (#1051).
     static let hermesCommands: [SlashCommand] = ["new", "stop", "model", "reasoning", "personality", "title", "goal",
                                                  "btw", "background", "bg", "retry", "undo", "compress",
-                                                 "compact"].compactMap(command(named:)) + [
+                                                 "compact", "branch", "fork"].compactMap(command(named:)) + [
         SlashCommand(
             name: "clear",
             description: String(localized: "Start a new chat with the same model and folder"),
@@ -255,7 +256,8 @@ enum SlashCommandCatalog {
 
     /// Host commands a Hermes chat holds until a later slice of #702: they rewrite history or
     /// move between chats, so the host alone would leave the phone stale. Listed, never run.
-    static let hermesHeldNames: Set<String> = ["branch", "fork"]
+    /// None is held now: `/branch` and `/fork` run natively (#1051).
+    static let hermesHeldNames: Set<String> = []
 
     static let reasoningLevels = ["show", "hide", "none", "minimal", "low", "medium", "high", "xhigh"]
     static let goalActions = ["status", "pause", "resume", "clear"]

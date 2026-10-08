@@ -188,10 +188,18 @@ enum BotConnectionAdvice {
     func updateSession(_ change: HermesSessionChange, key: String, profile: String) async throws -> String?
     /// The session's row and messages as the host exports them (`HermesREST.sessionExport`, #1048).
     func exportSession(key: String, profile: String) async throws -> Data
+    /// That exact session's stored row (`HermesREST.sessionRow`, #1051); nil when the host has
+    /// no such session (404).
+    func sessionRow(key: String, profile: String) async throws -> BotJSON?
+    /// Sends one session import, its JSON `body` already encoded (`HermesREST.importSessions`,
+    /// #1051), and returns the host's result. A payload the host refuses throws its reason as
+    /// `HermesSessionRefusal`.
+    func importSessions(body: Data) async throws -> BotJSON
     /// `profile`'s sessions matching `query`, in the host's order (`HermesREST.sessionSearch`, #1053).
     func searchSessions(query: String, profile: String) async throws -> [HermesSessionSearchResult]
-    /// The runtimes this phone's screens attached on the connection (`session.resume`) and have
-    /// not closed, so a delete can tell its own from another app's (#1048).
+    /// The runtimes this phone's screens attached on the connection (`session.resume`) or branched
+    /// (`session.branch`, #1051) and have not closed, so a delete can tell its own from another
+    /// app's (#1048).
     var attachedRuntimes: Set<String> { get }
     /// Ends this screen's calls, uploads and downloads; the shared socket stays for others.
     func close()
@@ -240,6 +248,14 @@ extension BotTransport {
     }
 
     func exportSession(key: String, profile: String) async throws -> Data {
+        throw BotFailure.unsupported
+    }
+
+    func sessionRow(key: String, profile: String) async throws -> BotJSON? {
+        throw BotFailure.unsupported
+    }
+
+    func importSessions(body: Data) async throws -> BotJSON {
         throw BotFailure.unsupported
     }
 

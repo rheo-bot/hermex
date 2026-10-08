@@ -101,8 +101,8 @@ struct SessionListRowActions {
 }
 
 /// Which row actions a session offers. A Hermes server's row (#1046, #1048) offers pin,
-/// rename, archive, delete, Export as JSON and Move to Project (#1052). Duplicate waits on a
-/// later slice of #702; the host has no HTML export, and Hermes deep links are #706.
+/// rename, archive, delete, Export as JSON, Move to Project (#1052) and Duplicate (#1051); the
+/// host has no HTML export, and Hermes deep links are #706.
 enum SessionRowActionPolicy {
     /// Pin, rename, move, archive and delete. A bot's Bot Chat, which a Hermes search lists
     /// (#1053), belongs to its bot: pinning would also unhide it, and renaming orphans it.
@@ -143,7 +143,7 @@ enum SessionRowActionPolicy {
     }
 
     static func canDuplicate(_ session: SessionSummary) -> Bool {
-        offersMutationActions(for: session) && session.hermes == nil && !session.requiresExternalImport
+        offersMutationActions(for: session) && !session.requiresExternalImport
     }
 
     static func canExport(_ session: SessionSummary, isViewingCachedData: Bool) -> Bool {
