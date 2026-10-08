@@ -1094,9 +1094,11 @@ to the first prompt's attachment.
 
 Unread is the host's `unread`, shared with Desktop. Opening a row sends
 `PATCH /api/sessions/{id} {unread: false, profile}` and clears the dot at once, showing the
-host's mark again if the write fails; Mark as Read and Unread send `unread` the same way. The
-first read after a chat closes marks it read again when the host calls it unread, since the
-reply that finished while it was open was seen. A session no client has marked reads as read.
+host's mark again if the write fails; Mark as Read and Unread send `unread` the same way. A
+session's writes go one at a time, each once the last has landed, so the host keeps the
+newest. The first read after a chat closes marks it read again when the host calls it unread,
+since the reply that finished while it was open was seen. A session no client has marked reads
+as read.
 
 After it connects, the list sends `session.most_recent {profile}`: the host watches a
 Profile's store for `sessions.changed` only once some call names it, and 4064 (or a list 404)

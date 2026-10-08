@@ -157,6 +157,34 @@ import Observation
         XCTAssertEqual(wire.unreadWrites, [.init(key: "a", profile: "default", unread: true)])
     }
 
+    /// Marking a row unread and opening it at once makes two marks. Sent together they could
+    /// land in either order and leave the older one on the host, so the newer waits for the
+    /// older to land.
+    func testASessionsMarksReachTheHostInTheOrderTheyWereMade() async throws {
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: page([HermesSessionRow(id: "a", unread: false)])]
+        let list = makeList(wire)
+        await list.openHermes()
+        let row = try XCTUnwrap(list.sessions.first)
+
+        wire.holdsUnread = true
+        list.toggleUnread(row)
+        await waitUntil("unread mark sent") { wire.unreadWrites.count == 1 }
+        list.beginViewing(row)
+        // One main-queue turn: a write started alongside the first would be on the wire now.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        XCTAssertEqual(wire.unreadWrites.count, 1, "the read mark waits while the unread mark is out")
+        XCTAssertFalse(list.isUnread(row), "the newer mark shows at once")
+
+        wire.holdsUnread = false
+        wire.release()
+        await waitUntil("read mark sent") { wire.unreadWrites.count == 2 }
+        XCTAssertEqual(wire.unreadWrites.map(\.unread), [true, false])
+        XCTAssertFalse(list.isUnread(row))
+    }
+
     /// The reply you just watched finished after the chat marked the session read, so the
     /// host calls it unread: the first read after returning marks it read again, and only it.
     func testReturningFromAChatMarksItReadAgain() async throws {

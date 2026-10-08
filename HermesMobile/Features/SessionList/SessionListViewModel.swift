@@ -155,6 +155,8 @@ final class SessionListViewModel {
     private(set) var isLoadingMoreSessions = false
     /// Read marks this phone wrote and shows ahead of the host's, by session id.
     private var hermesUnreadMarks: [String: HermesUnreadMark] = [:]
+    /// Each session's latest read-mark write, which its next one waits for.
+    @ObservationIgnored private var hermesUnreadWrites: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var hermesWire: (any BotTransport)?
     /// False while a chat covers the list: `sessions.changed` is ignored and live states rest.
     @ObservationIgnored private var hermesIsListening = false
@@ -1818,14 +1820,17 @@ final class SessionListViewModel {
         errorMessage = BotConnectionAdvice.message(for: error, address: hermes.connection.address)
     }
 
-    /// Shows the host's mark as `unread` at once and writes it; a refused or lost write shows
-    /// the host's again. A later write to the same session replaces this one's outcome.
+    /// Shows the host's mark as `unread` at once and writes it once the session's earlier write
+    /// has landed, so the host takes them in the order they were made; a refused or lost write
+    /// shows the host's again. A later write to the same session replaces this one's outcome.
     private func setHermesUnread(_ unread: Bool, _ session: SessionSummary) {
         guard let wire = hermesWire, let key = Self.nonEmpty(session.sessionId),
               let profile = Self.nonEmpty(session.profile) ?? hermesProfile else { return }
         let mark = HermesUnreadMark(unread: unread)
         hermesUnreadMarks[key] = mark
-        Task { [weak self] in
+        let earlier = hermesUnreadWrites[key]
+        hermesUnreadWrites[key] = Task { [weak self] in
+            await earlier?.value
             let written: Bool
             do { try await wire.setSessionUnread(unread, key: key, profile: profile); written = true } catch { written = false }
             guard let self, self.hermesUnreadMarks[key]?.id == mark.id else { return }
