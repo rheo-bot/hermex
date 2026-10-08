@@ -2341,6 +2341,9 @@ struct ChatView: View {
             )
 
             if result != .sendAsMessage {
+                if !result.isSuccessfulSubmission {
+                    await openCompressionContinuationIfNeeded()
+                }
                 if result.isSuccessfulSubmission {
                     switch parsedCommand?.handler {
                     case .serverSide(.queue), .serverSide(.steer), .serverSide(.interrupt):
@@ -2378,6 +2381,9 @@ struct ChatView: View {
             )
         }
 
+        if !didStart {
+            await openCompressionContinuationIfNeeded()
+        }
         if didStart {
             ChatHaptics.messageSent(isEnabled: isHapticsEnabled)
             applySubmissionFocus()
@@ -2445,6 +2451,7 @@ struct ChatView: View {
             current: ComposerDraftContent(text: draftMessage, quotes: draftQuotes),
             didStart: didStart,
             draftWasEdited: draftRevision != submittedDraftRevision,
+            preserveRejectedSubmission: viewModel.isCompressionRotated,
             for: draftKey
         )
         draftMessage = resolvedContent.text
@@ -2459,6 +2466,28 @@ struct ChatView: View {
         }
 
         return didStart
+    }
+
+    private func openCompressionContinuationIfNeeded() async {
+        guard isOnScreen, !Task.isCancelled else { return }
+        draftStore.setContent(ComposerDraftContent(text: draftMessage, quotes: draftQuotes), for: draftKey)
+        syncDraftAttachments()
+        if let continuation = await viewModel.compressionContinuationForNavigation(
+            from: draftKey, isCurrent: { isOnScreen },
+            prepareDraftForHandoff: {
+                draftStore.setContent(ComposerDraftContent(text: draftMessage, quotes: draftQuotes), for: draftKey)
+                syncDraftAttachments()
+            }
+        ) {
+            // The destination owns the retained work now; don't show a second
+            // unsent copy when the user returns to the sealed parent.
+            draftMessage = ""
+            draftQuotes = []
+            draftAttachmentsPendingRetry = []
+            lastSyncedDraftAttachments = []
+            viewModel.clearPendingAttachments()
+            pushedSession = continuation
+        }
     }
 
     /// Asks once per install, right after a normal send or voice note started a run, whether
@@ -2528,7 +2557,8 @@ struct ChatView: View {
             if consumesDraft {
                 reconcileConsumedDraft(
                     ComposerDraftContent(text: submittedDraft, quotes: submittedQuotes),
-                    submittedDraftRevision: submittedDraftRevision
+                    submittedDraftRevision: submittedDraftRevision,
+                    preserveRejectedSubmission: viewModel.isCompressionRotated
                 )
             }
         case .needsSubArg:
@@ -2782,12 +2812,14 @@ struct ChatView: View {
 
     private func reconcileConsumedDraft(
         _ submittedContent: ComposerDraftContent,
-        submittedDraftRevision: Int
+        submittedDraftRevision: Int,
+        preserveRejectedSubmission: Bool = false
     ) {
         let resolvedContent = draftStore.resolveConsumedInput(
             submitted: submittedContent,
             current: ComposerDraftContent(text: draftMessage, quotes: draftQuotes),
             draftWasEdited: draftRevision != submittedDraftRevision,
+            preserveRejectedSubmission: preserveRejectedSubmission,
             for: draftKey
         )
         draftMessage = resolvedContent.text
