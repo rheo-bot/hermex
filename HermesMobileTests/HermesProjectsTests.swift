@@ -130,19 +130,53 @@ import Observation
         host.next("projects.create", .init(error: 5063, message: refusal))
 
         let refused = await list.createHermesProject(named: "Launch", color: "#7cb9ff", folder: "/Users/me/launch/")
-        XCTAssertFalse(refused)
+        XCTAssertNil(refused)
         XCTAssertEqual(list.projectSheetErrorMessage, refusal)
 
         host.always("projects.create", .init(result: .object(["project": .object(["id": .string("p_9")])])))
         host.always("projects.tree", .init(result: tree([node("p_9", "Launch", path: "/Users/me/launch", sessions: ["a"])])))
         let created = await list.createHermesProject(named: " Launch ", color: "#7cb9ff", folder: "/Users/me/launch/")
 
-        XCTAssertTrue(created)
+        XCTAssertEqual(created, "/Users/me/launch")
         XCTAssertNil(list.projectSheetErrorMessage)
         let create: [String: BotJSON] = ["profile": .string("default"), "name": .string("Launch"),
                                          "folders": .array([.string("/Users/me/launch")]),
                                          "primary_path": .string("/Users/me/launch"), "color": .string("#7cb9ff")]
         XCTAssertEqual(writes(host, ["projects.create"]), [create, create])
+        XCTAssertEqual(lane("p_9", in: list), ["a"])
+    }
+
+    /// A lane read that began before a create can answer after the read the create made. Only
+    /// the latest read applies, so the created project stays.
+    func testAnOlderLaneReadAnsweringLastKeepsTheCreatedProject() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        serve([0: [row("a", cwd: "/Users/me/launch")]])
+        host.always("projects.tree", .init(result: tree([])))
+        var wire: HeldTreeWire?
+        let list = SessionListViewModel(server: server, unreadStore: SessionUnreadStore(defaults: defaults), hermes: HermesSessionListSource(
+            connection: record, profile: "default", makeWire: { _ in
+                let held = HeldTreeWire(BotClient(http: connection))
+                wire = held
+                return held
+            }, preferences: defaults, changeDebounce: .zero, statusPollInterval: .seconds(3600), reconnectDelays: [.seconds(3600)]
+        ))
+        await list.openHermes()
+        let held = try XCTUnwrap(wire)
+
+        let holding = expectation(description: "the reload's lane read is held")
+        held.holdNext = holding
+        let reload = Task { await list.openHermes() }
+        await fulfillment(of: [holding], timeout: 5)
+        host.always("projects.create", .init(result: .object(["project": .object(["id": .string("p_9")])])))
+        host.always("projects.tree", .init(result: tree([node("p_9", "Launch", path: "/Users/me/launch", sessions: ["a"])])))
+        let created = await list.createHermesProject(named: "Launch", color: "#7cb9ff", folder: "/Users/me/launch")
+        XCTAssertEqual(created, "/Users/me/launch")
+        XCTAssertEqual(list.projects.map(\.projectId), ["p_9"])
+        held.release()
+        await reload.value
+
+        XCTAssertEqual(list.projects.map(\.projectId), ["p_9"])
         XCTAssertEqual(lane("p_9", in: list), ["a"])
     }
 
@@ -228,6 +262,25 @@ import Observation
         await waitUntil("out of the lane") { self.lane("p_1", in: list).isEmpty }
 
         XCTAssertEqual(writes(host, ["session.workspace.move"]).map { $0["cwd"] }, [.string("/Users/me/launch"), .string("/Users/me/old")])
+    }
+
+    /// New Project from a row's Move menu ends with the session in the project: saved on the
+    /// session's own folder, or a parent of it, the session is already the project's; saved on
+    /// another, it asks the same Move to Project. The list's New Project moves nothing.
+    func testANewProjectFromAMoveMenuAsksToMoveTheSessionOnlyWhenItWorksElsewhere() throws {
+        let session = SessionSummary(sessionId: "a", workspace: "/Users/me/launch/app", profile: "default")
+        let fromMenu = HermesProjectCreation(folder: "/Users/me/launch/app", session: session)
+
+        XCTAssertNil(HermesProjectCreation(folder: "").move(intoProjectNamed: "Launch", savedOn: "/Users/me/other", isBusy: false))
+        XCTAssertNil(fromMenu.move(intoProjectNamed: "Launch", savedOn: "/Users/me/launch/app", isBusy: false))
+        XCTAssertNil(fromMenu.move(intoProjectNamed: "Launch", savedOn: "/Users/me/launch", isBusy: false))
+        XCTAssertNotNil(fromMenu.move(intoProjectNamed: "Launch", savedOn: "/Users/me/launch/ap", isBusy: false),
+                        "a sibling folder sharing a prefix is not a parent")
+        let move = try XCTUnwrap(fromMenu.move(intoProjectNamed: " Other ", savedOn: "/Users/me/other", isBusy: true))
+        XCTAssertEqual(move.session.sessionId, "a")
+        XCTAssertEqual(move.folder, "/Users/me/other")
+        XCTAssertEqual(move.title, "Move to Other?")
+        XCTAssertTrue(move.isBusy)
     }
 
     // MARK: Folder field
@@ -327,6 +380,40 @@ import Observation
     /// The params of every call to one of `methods`, in order.
     private func writes(_ host: BotSocketHost, _ methods: Set<String>) -> [[String: BotJSON]] {
         host.requests.filter { methods.contains($0["method"].text ?? "") }.compactMap { $0["params"].fields }
+    }
+
+    /// The list's client, with one `projects.tree` reply held back on request, so an older lane
+    /// read can answer after a newer one.
+    private final class HeldTreeWire: BotTransport {
+        private let inner: BotClient
+        /// Fulfilled when the next lane read's reply is held; its reply waits for `release()`.
+        var holdNext: XCTestExpectation?
+        private var held: CheckedContinuation<Void, Never>?
+
+        init(_ inner: BotClient) { self.inner = inner }
+
+        var replayEpoch: String? { inner.replayEpoch }
+        var onEvent: ((BotJSON) -> Void)? {
+            get { inner.onEvent }
+            set { inner.onEvent = newValue }
+        }
+        var onDisconnect: ((Error) -> Void)? {
+            get { inner.onDisconnect }
+            set { inner.onDisconnect = newValue }
+        }
+        func connect() async throws { try await inner.connect() }
+        func close() { inner.close() }
+        func sessionPage(profile: String, offset: Int, archived: Bool) async throws -> HermesSessionPage {
+            try await inner.sessionPage(profile: profile, offset: offset, archived: archived)
+        }
+        func call(_ call: HermesCall, validateDispatch: (() throws -> Void)?) async throws -> BotJSON {
+            let reply = try await inner.call(call, validateDispatch: validateDispatch)
+            guard call.method == "projects.tree", let holding = holdNext else { return reply }
+            holdNext = nil
+            await withCheckedContinuation { held = $0; holding.fulfill() }
+            return reply
+        }
+        func release() { held?.resume(); held = nil }
     }
 
     /// Waits on observation of the list, never a clock, and fails once nothing changes for 5 s.

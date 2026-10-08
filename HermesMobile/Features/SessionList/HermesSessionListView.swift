@@ -49,6 +49,9 @@ struct HermesSessionListView: View {
     @State private var renamingProject: ProjectSummary?
     @State private var deletingProject: ProjectSummary?
     @State private var moving: HermesProjectMove?
+    /// The Move to Project a project created from a row's Move menu still needs, asked once the
+    /// sheet is gone.
+    @State private var movingAfterCreation: HermesProjectMove?
 
     init(entry: HermesSessionListEntry) {
         self.entry = entry
@@ -124,7 +127,11 @@ struct HermesSessionListView: View {
                 // Each export has its own temp directory (`SessionListViewModel.export`).
                 .onDisappear { try? FileManager.default.removeItem(at: item.fileURL.deletingLastPathComponent()) }
         }
-        .sheet(item: $creatingProject, onDismiss: { viewModel.clearProjectSheetError() }) { creation in
+        .sheet(item: $creatingProject, onDismiss: {
+            viewModel.clearProjectSheetError()
+            moving = movingAfterCreation
+            movingAfterCreation = nil
+        }) { creation in
             ProjectCreationSheet(
                 existingProjectCount: viewModel.projects.count, isSaving: viewModel.isCreatingProject,
                 folder: ProjectFolderField(initialPath: creation.folder) { await viewModel.completeHermesFolder($0) },
@@ -133,7 +140,10 @@ struct HermesSessionListView: View {
                 creatingProject = nil
             } onSave: { name, color, folder in
                 Task {
-                    if await viewModel.createHermesProject(named: name, color: color, folder: folder ?? "") { creatingProject = nil }
+                    guard let saved = await viewModel.createHermesProject(named: name, color: color, folder: folder ?? "") else { return }
+                    movingAfterCreation = creation.move(intoProjectNamed: name, savedOn: saved, isBusy: creation.session
+                        .map { viewModel.attentionState(for: $0) != nil } ?? false)
+                    creatingProject = nil
                 }
             }
             .presentationDetents([.medium, .large])
@@ -266,7 +276,8 @@ struct HermesSessionListView: View {
 
     /// Opening a row, Mark as Read or Unread, and the row actions `SessionRowActionPolicy`
     /// offers a Hermes row; Duplicate waits on a later slice of #702. Move to Project asks first,
-    /// and its New Project starts on the session's folder.
+    /// and its New Project starts on the session's folder, then asks to move it there if it
+    /// was saved on another.
     private var actions: SessionListRowActions {
         SessionListRowActions(
             retryLoad: { Task { await viewModel.openHermes() } },
@@ -290,7 +301,7 @@ struct HermesSessionListView: View {
                 moving = HermesProjectMove(session: session, projectName: project.name ?? folder, folder: folder,
                                            isBusy: viewModel.attentionState(for: session) != nil)
             },
-            createProject: { session in creatingProject = HermesProjectCreation(folder: session.workspace ?? "") },
+            createProject: { session in creatingProject = HermesProjectCreation(folder: session.workspace ?? "", session: session) },
             refreshProjects: { Task { await viewModel.openHermes() } },
             export: { session, format in
                 Task { if let url = await viewModel.export(session, format: format) { exported = SessionExportShareItem(fileURL: url) } }
@@ -357,6 +368,19 @@ struct HermesSessionListView: View {
 struct HermesProjectCreation: Identifiable {
     let id = UUID()
     let folder: String
+    /// The session whose Move menu opened the sheet; nil from the list's New Project.
+    var session: SessionSummary?
+
+    /// The Move to Project that puts `session` in the project just saved on `folder`, which asks
+    /// first as any other does. Nil from the list's New Project, or when the session already
+    /// works in or under `folder`, which makes it the project's.
+    func move(intoProjectNamed name: String, savedOn folder: String, isBusy: Bool) -> HermesProjectMove? {
+        guard let session else { return nil }
+        let current = session.workspace ?? ""
+        guard current != folder, !current.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/") else { return nil }
+        return HermesProjectMove(session: session, projectName: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                                 folder: folder, isBusy: isBusy)
+    }
 }
 
 /// A Move to Project waiting on its confirmation (#1052), with copy that says what it does: Hermes

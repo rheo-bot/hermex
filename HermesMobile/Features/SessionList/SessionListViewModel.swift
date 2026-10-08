@@ -165,6 +165,9 @@ final class SessionListViewModel {
     @ObservationIgnored private var hermesPages = HermesSessionPages()
     /// Bumped by each list read, so only the newest one applies.
     @ObservationIgnored private var hermesReadSerial = 0
+    /// Bumped by each project-lane read: a create, rename or delete reads the lanes under the
+    /// list read's serial, so an older lane read could otherwise answer last and apply.
+    @ObservationIgnored private var hermesProjectsSerial = 0
     @ObservationIgnored private var hermesStatusSerial = 0
     @ObservationIgnored private var hermesReloadTask: Task<Void, Never>?
     @ObservationIgnored private var hermesReloadWanted = false
@@ -2184,14 +2187,14 @@ final class SessionListViewModel {
 
     /// Creates a project on one host folder, its primary. Sessions working in that folder join
     /// it, so the lanes are read again. The host's refusal, such as a folder another project
-    /// already has, stays in the sheet.
-    func createHermesProject(named rawName: String, color: String, folder rawFolder: String) async -> Bool {
+    /// already has, stays in the sheet. Returns the folder it was saved on; nil when it wasn't.
+    func createHermesProject(named rawName: String, color: String, folder rawFolder: String) async -> String? {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         var folder = rawFolder.trimmingCharacters(in: .whitespacesAndNewlines)
         while folder.count > 1, folder.hasSuffix("/") { folder.removeLast() }
         guard let wire = hermesWire, let profile = hermesProfile else {
             projectSheetErrorMessage = hermesActionFailure(BotFailure.transport)
-            return false
+            return nil
         }
         isCreatingProject = true
         projectSheetErrorMessage = nil
@@ -2199,10 +2202,10 @@ final class SessionListViewModel {
         do {
             _ = try await wire.call(.projectsCreate(profile: profile, name: name, folder: folder, color: color))
             await readHermesProjects(wire, readSerial: hermesReadSerial)
-            return true
+            return folder
         } catch {
             if !Task.isCancelled { projectSheetErrorMessage = hermesActionFailure(error) }
-            return false
+            return nil
         }
     }
 
@@ -2274,15 +2277,18 @@ final class SessionListViewModel {
     }
 
     /// Reads the Profile's project lanes and shows each listed row in the lane that claims it.
-    /// Only a read still current applies; a failed one keeps the last lanes, which only filter
-    /// the list.
+    /// Only the latest lane read, under a list read still current, applies; a failed one keeps
+    /// the last lanes, which only filter the list.
     private func readHermesProjects(_ wire: any BotTransport, readSerial serial: Int) async {
         guard let profile = hermesProfile else { return }
+        hermesProjectsSerial += 1
+        let projectsSerial = hermesProjectsSerial
         let showsLoading = !hermesProjectsRead
         if showsLoading { isLoadingProjects = true }
         defer { if showsLoading { isLoadingProjects = false } }
         let reply = try? await wire.call(.projectsTree(profile: profile))
-        guard serial == hermesReadSerial, hermesWire === wire, hermesProfile == profile else { return }
+        guard serial == hermesReadSerial, projectsSerial == hermesProjectsSerial,
+              hermesWire === wire, hermesProfile == profile else { return }
         hermesProjectsRead = true
         guard let reply else { return }
         let tree = HermesProjectTree(reply: reply)
