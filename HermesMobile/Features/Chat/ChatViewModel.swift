@@ -5387,8 +5387,9 @@ final class ChatViewModel {
 
     /// Why a Hermes rewind or `/undo` failed. A refusal is the host's own message, except busy
     /// (4009) and a row it can no longer cut (4018). An answer that was lost or unreadable may
-    /// have been taken: Send waits while the chat reattaches, so the transcript shows what
-    /// happened, and nothing is sent again (#508).
+    /// have been taken, and an `/undo` whose re-read failed still shows the exchange: Send
+    /// waits while the chat reattaches, so the transcript shows what happened, and nothing is
+    /// sent again (#508).
     private func hermesHistoryFailure(_ error: Error, on hermes: HermesChatTurnCoordinator, reconnect: String) -> String {
         switch error {
         case is HermesChatTurnCoordinator.NotSent, BotSettingFailure.rejected(4001, _):

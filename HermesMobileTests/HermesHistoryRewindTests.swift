@@ -192,6 +192,24 @@ import Observation
         XCTAssertEqual(chat.writes("slash.exec"), [], "never the host's own /undo")
     }
 
+    /// An `/undo` the host took whose newest-page read then fails still shows the exchange, so
+    /// it is not reported done: Send waits, and the reattach's read shows it gone. A retried
+    /// `/undo` would remove another exchange for good.
+    func testAnUndoWhoseReadFailsHoldsSendUntilTheReattachShowsIt() async {
+        let chat = await openChat(threeTurns)
+        chat.host.always("session.undo", .init(result: .object(["removed": .number(2)])))
+        chat.transcript.rows = Array(threeTurns.prefix(4))
+        chat.transcript.failingReads = 1
+
+        let result = await chat.model.runHermesSlashCommand("/undo")
+
+        XCTAssertEqual(result, .notDelivered)
+        XCTAssertTrue(chat.model.isHermesSubmissionUncertain)
+        await waitUntil("reattached") { !chat.model.isHermesSubmissionUncertain }
+        XCTAssertEqual(chat.model.messages.compactMap(\.rowID), [1, 2, 3, 4])
+        XCTAssertEqual(chat.writes("session.undo").count, 1)
+    }
+
     /// Each `/undo` removes an exchange for good, so a second one while the first is out is
     /// refused, never sent.
     func testASecondUndoIsRefusedWhileTheFirstIsOut() async {
@@ -218,14 +236,28 @@ import Observation
          row(4, "assistant", "Second answer."), row(5, "user", "Third"), row(6, "assistant", "Third answer.")]
     }
 
-    /// The session's transcript as its pages serve it: one short page, so every read is the whole session.
+    /// The session's transcript as its pages serve it: one short page, so every read is the whole
+    /// session. The next `failingReads` reads fail with a 502.
     private final class Transcript: @unchecked Sendable {
         private let lock = NSLock()
         private var stored: [BotJSON]
+        private var failing = 0
         init(_ rows: [BotJSON]) { stored = rows }
         var rows: [BotJSON] {
             get { lock.withLock { stored } }
             set { lock.withLock { stored = newValue } }
+        }
+        var failingReads: Int {
+            get { lock.withLock { failing } }
+            set { lock.withLock { failing = newValue } }
+        }
+        /// True when this read fails, counting it.
+        func takeFailure() -> Bool {
+            lock.withLock {
+                guard failing > 0 else { return false }
+                failing -= 1
+                return true
+            }
         }
     }
 
@@ -255,6 +287,7 @@ import Observation
         let transcript = Transcript(rows)
         _ = HermesHostFixture.configuration { request in
             guard request.url?.path == "/api/sessions/tip/messages" else { return nil }
+            if transcript.takeFailure() { return .json(502, .object(["detail": .string("Bad Gateway")])) }
             return .json(200, .object(["session_id": .string("tip"), "messages": .array(transcript.rows)]))
         }
         let engine = HermesConversation(server: URL(string: "https://hermes.example")!, connection: Self.connection,

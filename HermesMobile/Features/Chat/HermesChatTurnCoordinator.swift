@@ -470,7 +470,8 @@ struct HermesChatTranscript: Equatable {
 
     /// `/undo` (#1049): `session.undo` removes the session's last exchange, then the newest
     /// rows are read again and replace the transcript. A host with nothing to undo removes
-    /// nothing, and nothing is read. Throws as `rewind` does.
+    /// nothing, and nothing is read. Throws as `rewind` does, and throws the read's failure
+    /// when the host removed the exchange but the chat still shows it.
     func undo() async throws {
         await activate()
         guard engine.connectionState == .connected, let runtime = engine.runtime else {
@@ -481,11 +482,8 @@ struct HermesChatTranscript: Equatable {
         guard reply["removed"].integer != 0 else { return }
         await readNewestRows(attempt: attempt)
         guard attempt == engine.generation, isIdle else { return }
-        if let historyFailure {
-            delegate?.hermesHistoryDidFail(BotConnectionAdvice.message(for: historyFailure, address: engine.connection.address))
-        } else {
-            delegate?.hermesReplaceTranscript(historyTranscript())
-        }
+        if let historyFailure { throw historyFailure }
+        delegate?.hermesReplaceTranscript(historyTranscript())
     }
 
     /// One history write on `runtime`, sent once. Throws `NotSent` when it never went out; a
