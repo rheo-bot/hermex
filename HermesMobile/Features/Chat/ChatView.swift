@@ -302,9 +302,10 @@ struct ChatView: View {
     let onReplaceHermesSession: ((HermesSessionChat) -> Void)?
     /// A Hermes session's dictation goes to its host for its Profile (#1071).
     private let hermesTranscriber: ComposerTranscriber?
-    /// Returns to the Sessions list under this Hermes chat, searching the query `/sessions` or
-    /// `/resume` named (#1053). Nil pushes a list on top instead.
-    let onOpenHermesSessions: ((String) -> Void)?
+    /// Returns to the Sessions list under this Hermes chat, in the entry's Profile (this chat's)
+    /// and searching the query `/sessions` or `/resume` named (#1053). Nil pushes a list on top
+    /// instead.
+    let onOpenHermesSessions: ((HermesSessionListEntry) -> Void)?
 
     /// The composer's draft. Never read it in `body` or wrap it in a get/set
     /// binding for the composer: either re-runs this whole screen on every
@@ -433,7 +434,7 @@ struct ChatView: View {
         onConversationStarted: @escaping () -> Void = {},
         hermesSession: HermesSessionChat? = nil,
         onReplaceHermesSession: ((HermesSessionChat) -> Void)? = nil,
-        onOpenHermesSessions: ((String) -> Void)? = nil
+        onOpenHermesSessions: ((HermesSessionListEntry) -> Void)? = nil
     ) {
         self.session = session
         self.server = server
@@ -473,7 +474,7 @@ struct ChatView: View {
     /// A Hermes session on its Profile (#1010). It has no webui session, so nothing here
     /// reaches the webui API; connection errors show in the chat itself.
     init(hermesSession: HermesSessionChat, onReplace: ((HermesSessionChat) -> Void)? = nil,
-         onOpenSessions: ((String) -> Void)? = nil) {
+         onOpenSessions: ((HermesSessionListEntry) -> Void)? = nil) {
         self.init(
             session: SessionSummary(profile: hermesSession.target.profile),
             server: hermesSession.server,
@@ -2547,7 +2548,7 @@ struct ChatView: View {
                     submittedDraftRevision: submittedDraftRevision
                 )
             }
-            if let onOpenHermesSessions { onOpenHermesSessions(entry.query) } else { pushedHermesSessionList = entry }
+            if let onOpenHermesSessions { onOpenHermesSessions(entry) } else { pushedHermesSessionList = entry }
         case .prefill(let text):
             // Unless the user typed on meanwhile: their edit wins.
             if draftRevision == submittedDraftRevision {

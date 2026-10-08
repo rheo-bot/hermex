@@ -653,6 +653,38 @@ import Observation
         XCTAssertEqual(wire.searches.count, 3)
     }
 
+    /// A list that reconnects (the socket dropped, or the app came back) searches again, since a
+    /// match past the loaded pages that another device deleted meanwhile changes only then.
+    func testAReconnectSearchesAgainSoAMatchDeletedElsewhereGoes() async throws {
+        let wire = HermesSessionListWire()
+        wire.searchResults = ["gone", "kept"].map { HermesSessionSearchResult(row: HermesSessionRow(id: $0, title: "Old \($0)", profile: "default")) }
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "old", debounceNanoseconds: 0)
+
+        wire.searchResults.removeFirst()
+        wire.onDisconnect?(BotFailure.transport)
+        await list.openHermes()
+
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: nil).compactMap(\.sessionId), ["kept"])
+        XCTAssertEqual(wire.searches.count, 2)
+    }
+
+    /// Pull to refresh searches again too, so a match another device deleted goes.
+    func testPullToRefreshSearchesAgain() async throws {
+        let wire = HermesSessionListWire()
+        wire.searchResults = ["gone", "kept"].map { HermesSessionSearchResult(row: HermesSessionRow(id: $0, title: "Old \($0)", profile: "default")) }
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "old", debounceNanoseconds: 0)
+
+        wire.searchResults.removeFirst()
+        await list.refreshHermes()
+
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: nil).compactMap(\.sessionId), ["kept"])
+        XCTAssertEqual(wire.searches.count, 2)
+    }
+
     /// A search the list moved off its Profile from never applies there.
     func testASearchAnotherProfileReplacedIsDropped() async {
         let wire = HermesSessionListWire()

@@ -200,7 +200,8 @@ final class SessionListViewModel {
     /// Each content match's snippet, its `>>>`/`<<<` marks and all, by row identity.
     private var hermesSearchSnippets: [String: String] = [:]
     /// A Hermes search that ran before the list's socket was attached, as one a list opened
-    /// searching starts; the list's next connect or refresh runs it.
+    /// searching starts, or one whose matches went stale when the socket closed or the user
+    /// pulled to refresh; the list's next connect or refresh runs it.
     @ObservationIgnored private var hermesSearchAwaitsConnect = false
 
     /// `hermes` makes this a Hermes server's list; nothing then reaches the webui API.
@@ -1782,6 +1783,15 @@ final class SessionListViewModel {
         hermesReadSerial += 1
         isLoading = false; isLoadingMoreSessions = false
         hermesWire?.close(); hermesWire = nil
+        // Matches past the loaded pages change only when the host is searched again.
+        if activeRemoteSearchQuery?.isEmpty == false { hermesSearchAwaitsConnect = true }
+    }
+
+    /// Pull to refresh: the list reads again, and so does the active search, whose matches
+    /// past the loaded pages (one another device deleted, say) change only when it runs again.
+    func refreshHermes() async {
+        if activeRemoteSearchQuery?.isEmpty == false { hermesSearchAwaitsConnect = true }
+        await openHermes()
     }
 
     /// Shows `profile`'s sessions, and remembers it as the server's pick, which the composer's
@@ -2096,7 +2106,8 @@ final class SessionListViewModel {
         showHermesSearch(results, in: profile)
     }
 
-    /// Runs the search that found the list's socket not yet attached, now that it is.
+    /// Runs the search that found the list's socket not yet attached, or went stale, now that
+    /// the list has read again.
     private func runAwaitedHermesSearch() async {
         guard hermesSearchAwaitsConnect, let query = activeRemoteSearchQuery else { return }
         hermesSearchAwaitsConnect = false

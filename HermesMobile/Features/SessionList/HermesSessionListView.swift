@@ -101,7 +101,7 @@ struct HermesSessionListView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 22)
         }
-        .refreshable { await viewModel.openHermes() }
+        .refreshable { await viewModel.refreshHermes() }
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search sessions")
         .autocorrectionDisabled()
         .textInputAutocapitalization(.never)
@@ -119,10 +119,12 @@ struct HermesSessionListView: View {
         }
         // Keyed by the chat, so a Profile picked in an empty chat replaces its screen (#1015).
         .navigationDestination(item: $chat) { chat in
-            // `/sessions` and `/resume` in the chat come back here, searching what they name.
-            ChatView(hermesSession: chat, onReplace: { self.chat = $0 }, onOpenSessions: { query in
+            // `/sessions` and `/resume` in the chat come back here, in the chat's Profile, searching
+            // what they name.
+            ChatView(hermesSession: chat, onReplace: { self.chat = $0 }, onOpenSessions: { opened in
                 self.chat = nil
-                searchText = query
+                if opened.profile != profile { Task { await viewModel.selectHermesProfile(opened.profile) } }
+                searchText = opened.query
             })
             .id(chat.id)
         }
