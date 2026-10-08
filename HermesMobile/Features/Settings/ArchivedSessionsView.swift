@@ -9,6 +9,7 @@ struct ArchivedSessionsView: View {
     let onAPIError: (Error) -> Void
 
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.modelContext) private var modelContext
     @State private var viewModel: ArchivedSessionsViewModel
     @State private var openedSession: SessionSummary?
     /// The Hermes session a row opened.
@@ -227,7 +228,7 @@ struct ArchivedSessionsView: View {
 
     private func delete(_ session: SessionSummary) {
         Task {
-            if await viewModel.delete(session) {
+            if await viewModel.delete(session, modelContext: modelContext) {
                 SessionHaptics.sessionDeleted(isEnabled: isHapticsEnabled)
             }
         }

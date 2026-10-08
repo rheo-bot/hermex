@@ -18,6 +18,9 @@ import SwiftData
     func hermesPrependHistory(_ transcript: HermesChatTranscript)
     /// A history read failed: the transcript keeps what it shows, and the chat says why (#1047).
     func hermesHistoryDidFail(_ message: String)
+    /// An attach failed with `error`; the engine may be retrying. A host it can't reach shows
+    /// the offline cache's copy (#1054).
+    func hermesAttachDidFail(_ error: Error)
     func hermesApplyUsage(_ usage: ContextWindowSnapshot)
     /// The model `session.info` reports: the Profile's default unless the host says otherwise.
     func hermesApplyModel(_ model: String)
@@ -62,6 +65,8 @@ struct HermesChatTranscript: Equatable {
     /// The running turn's unsaved reply, which the next deltas continue.
     var streamingReply: ChatMessage?
     var title: String?
+    /// The row ids the last newest read covered, for the offline cache (#1054).
+    var newestRowIDs: ClosedRange<Int>?
 }
 
 /// Runs a Hermes session's turns in the main chat (#1010). It owns the session's
@@ -869,7 +874,7 @@ struct HermesChatTranscript: Equatable {
         let projected = HermesTranscriptProjection.project(history.rows, root: engine.storedKey ?? "")
         return HermesChatTranscript(messages: projected.messages.map(Self.displayed), toolCallGroups: projected.toolCallGroups,
                                     reasoningGroups: projected.reasoningGroups, compaction: projected.compaction,
-                                    hasOlder: history.hasOlder)
+                                    hasOlder: history.hasOlder, newestRowIDs: history.newestRowIDs)
     }
 
     /// One transcript page from `offset` under the attach `attempt` began. A session the host
@@ -1242,6 +1247,10 @@ extension HermesChatTurnCoordinator: HermesConversationOwner {
         }
         try engine.check(attempt)
         reconcile(with: snapshot)
+    }
+
+    func conversationDidFailToAttach(_ error: Error) {
+        delegate?.hermesAttachDidFail(error)
     }
 
     func conversationDidConnect(runtime: String, attempt: Int) async throws {

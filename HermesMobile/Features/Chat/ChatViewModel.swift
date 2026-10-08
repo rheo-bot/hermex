@@ -367,6 +367,11 @@ final class ChatViewModel {
     /// A Hermes session's compaction, from its settled history (#1047), in place of the
     /// webui's `compression_anchor_*` metadata.
     @ObservationIgnored private var hermesCompaction: HermesCompaction?
+    /// The offline cache a Hermes session's settled history is written to and read back from
+    /// while its host can't be reached (#1054), from the chat's first load.
+    @ObservationIgnored private var hermesCache: ModelContext?
+    /// The lineage root this Hermes session's cached transcript is kept under, once found.
+    @ObservationIgnored private var hermesCacheRoot: String?
     private func applyCompressionAnchorMetadata(from session: SessionDetail?) {
         compressionAnchorMetadata = CompressionAnchorMetadata(from: session)
         recomputeCompressionReferenceCard()
@@ -1621,6 +1626,7 @@ final class ChatViewModel {
     /// `prepareInitialMessageLoad` already sent instead of sending another.
     func loadMessages(modelContext: ModelContext? = nil, usesInitialPrefetch: Bool = false) async {
         if let hermesTurn {
+            if let modelContext { hermesCache = modelContext }
             await loadHermesSession(hermesTurn)
             return
         }
@@ -7401,6 +7407,8 @@ extension ChatViewModel: HermesChatTurnDelegate {
     }
 
     func hermesReplaceTranscript(_ transcript: HermesChatTranscript) {
+        // The host's own rows replace a cached copy, which shares their ids.
+        if isViewingCachedData { isViewingCachedData = false }
         resetPendingStreamingContentBuffers()
         let next = Self.hermesKeepingOwnRows(of: messages, in: transcript.messages + transcript.live)
             + (transcript.streamingReply.map { [$0] } ?? [])
@@ -7420,6 +7428,7 @@ extension ChatViewModel: HermesChatTurnDelegate {
         streamingAssistantMessageID = transcript.streamingReply?.messageId
         if let title = transcript.title { applyLiveActivitySessionTitle(title) }
         if !messages.isEmpty { transcriptRelayoutScrollToken += 1 }
+        cacheHermesHistory(transcript)
     }
 
     func hermesPrependHistory(_ transcript: HermesChatTranscript) {
@@ -7439,10 +7448,65 @@ extension ChatViewModel: HermesChatTurnDelegate {
         hermesHistoryGroupIDs = Set(transcript.toolCallGroups.map(\.id) + transcript.reasoningGroups.map(\.id))
         hermesCompaction = transcript.compaction
         recomputeCompressionReferenceCard()
+        cacheHermesHistory(transcript)
     }
 
     func hermesHistoryDidFail(_ message: String) {
         errorMessage = message
+    }
+
+    /// A chat with nothing on screen whose host can't be reached shows the newest page of its
+    /// cached transcript, read-only (`isViewingCachedData`), as a webui chat does offline. The
+    /// engine keeps reattaching, and the host's transcript replaces it once one succeeds.
+    func hermesAttachDidFail(_ error: Error) {
+        guard messages.isEmpty, CacheFallbackPolicy.shouldUseCache(for: error), let scope = hermesCacheScope() else { return }
+        let cached: [ChatMessage]
+        do {
+            cached = try CacheStore.cachedHermesMessages(serverURL: scope.server, profile: scope.profile,
+                                                         lineageRoot: scope.root, in: scope.context,
+                                                         limit: HermesREST.transcriptPageSize)
+        } catch {
+            cacheErrorMessage = error.localizedDescription
+            return
+        }
+        guard !cached.isEmpty else { return }
+        messagesOffset = Self.hermesTranscriptBase
+        messages = cached
+        transcriptRevision &+= 1
+        hasOlderMessages = false
+        isViewingCachedData = true
+        errorMessage = nil
+        setCompletedToolCallGroups([])
+        completedReasoningGroups = []
+        hermesHistoryGroupIDs = []
+        hermesCompaction = nil
+        recomputeCompressionReferenceCard()
+        transcriptRelayoutScrollToken += 1
+    }
+
+    /// Writes the settled history a Hermes transcript holds to the offline cache (#1054).
+    private func cacheHermesHistory(_ transcript: HermesChatTranscript) {
+        guard let scope = hermesCacheScope() else { return }
+        do {
+            try CacheStore.cacheHermesMessages(transcript.messages, newestRowIDs: transcript.newestRowIDs,
+                                               serverURL: scope.server, profile: scope.profile, lineageRoot: scope.root,
+                                               in: scope.context)
+        } catch {
+            cacheErrorMessage = error.localizedDescription
+        }
+    }
+
+    /// Where this Hermes session's transcript sits in the offline cache: its server, Profile and
+    /// lineage root, which the list's cached row names for its key, else the key. Settled once
+    /// found, so a key the host later moves keeps the same place. Nil without a cache, and for
+    /// a new session until the host names its key.
+    private func hermesCacheScope() -> (context: ModelContext, server: URL, profile: String, root: String)? {
+        guard let hermesCache, let engine = hermesTurn?.engine, case .session(let profile, let key) = engine.target else { return nil }
+        let root = hermesCacheRoot
+            ?? (try? CacheStore.hermesLineageRoot(forKey: key, profile: profile, serverURL: engine.server, in: hermesCache))
+            ?? key
+        hermesCacheRoot = root
+        return (hermesCache, engine.server, profile, root)
     }
 
     func hermesApplyUsage(_ usage: ContextWindowSnapshot) {

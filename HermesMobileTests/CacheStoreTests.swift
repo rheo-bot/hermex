@@ -1028,6 +1028,217 @@ final class CacheStoreTests: XCTestCase {
         XCTAssertEqual(try CacheStore.cachedSession(id: "parent", serverURL: serverA, in: context)?.title, "On server A")
     }
 
+    // MARK: Hermes (#1054)
+
+    /// A Hermes session is keyed by its server, Profile and lineage root and keeps the tip it
+    /// opens by; its messages share that scope, by row id. It reads back as the list showed it.
+    func testHermesKeysCarryTheServerProfileAndLineageRoot() throws {
+        let context = try makeContext()
+        let row = HermesSessionRow(id: "tip", title: "Chain", preview: "First prompt", lastActive: 1_770_000_000, unread: true,
+                                   lineageRootID: "root").summary(in: "default")
+        try CacheStore.cacheHermesSessions([row], profile: "default", reachedEnd: false, serverURL: hermesServer, in: context)
+        try CacheStore.cacheHermesMessages([hermesMessage(7)], newestRowIDs: 7...7, serverURL: hermesServer,
+                                           profile: "default", lineageRoot: "root", in: context)
+
+        let session = try XCTUnwrap(fetchCachedSessions(in: context).first)
+        XCTAssertEqual(session.cacheKey, "https://hermes.example|hermes|default|root")
+        XCTAssertEqual(session.sessionID, "tip")
+        let message = try XCTUnwrap(fetchCachedMessages(in: context).first)
+        XCTAssertEqual(message.cacheKey, "https://hermes.example|hermes|default|root|row|7")
+        XCTAssertEqual(message.sessionID, "hermes|default|root")
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: hermesServer, profile: "default", in: context), [row])
+        XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "root",
+                                                           in: context, limit: 10), [hermesMessage(7)])
+        XCTAssertEqual(try CacheStore.hermesLineageRoot(forKey: "tip", profile: "default", serverURL: hermesServer, in: context), "root")
+
+        // The same session id in another Profile's store is another session.
+        let other = HermesSessionRow(id: "tip", title: "Elsewhere", lineageRootID: "root").summary(in: "research")
+        try CacheStore.cacheHermesSessions([other], profile: "research", reachedEnd: true, serverURL: hermesServer, in: context)
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: hermesServer, profile: "default", in: context).map(\.title), ["Chain"])
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: hermesServer, profile: "research", in: context).map(\.title), ["Elsewhere"])
+    }
+
+    /// Each page is upserted and none sweeps, so reading page 1 alone keeps the rows later pages
+    /// brought. A walk that reached the list's end drops a cached row it lacks. Archived rows
+    /// are never cached.
+    func testHermesPagesUpsertAndOnlyAWalkToTheEndRemovesARow() throws {
+        let context = try makeContext()
+        func cache(_ rows: [HermesSessionRow], reachedEnd: Bool) throws {
+            try CacheStore.cacheHermesSessions(rows.map { $0.summary(in: "default") }, profile: "default",
+                                               reachedEnd: reachedEnd, serverURL: hermesServer, in: context)
+        }
+        func cached() throws -> [String?] {
+            try CacheStore.cachedHermesSessions(serverURL: hermesServer, profile: "default", in: context).map(\.title)
+        }
+        let a = HermesSessionRow(id: "a", title: "A", lastActive: 30)
+        let b = HermesSessionRow(id: "b", title: "B", lastActive: 20)
+        let c = HermesSessionRow(id: "c", title: "C", lastActive: 10)
+
+        try cache([a, b], reachedEnd: false)
+        try cache([a, b, c, HermesSessionRow(id: "gone", title: "Archived", archived: true)], reachedEnd: true)
+        XCTAssertEqual(try cached(), ["A", "B", "C"])
+
+        try cache([HermesSessionRow(id: "a", title: "A renamed", lastActive: 40), b], reachedEnd: false)
+        XCTAssertEqual(try cached(), ["A renamed", "B", "C"], "page 1 alone keeps page 2's row")
+
+        try cache([HermesSessionRow(id: "a", title: "A renamed", lastActive: 40), c], reachedEnd: true)
+        XCTAssertEqual(try cached(), ["A renamed", "C"], "a walk to the end drops the row deleted elsewhere")
+    }
+
+    /// A session this phone deleted or archived leaves the cache with its transcript.
+    func testRemovingAHermesSessionTakesItsTranscript() throws {
+        let context = try makeContext()
+        let rows = ["a", "b"].map { HermesSessionRow(id: $0, title: $0.uppercased()).summary(in: "default") }
+        try CacheStore.cacheHermesSessions(rows, profile: "default", reachedEnd: true, serverURL: hermesServer, in: context)
+        for root in ["a", "b"] {
+            try CacheStore.cacheHermesMessages([hermesMessage(1, root: root)], newestRowIDs: 1...1, serverURL: hermesServer,
+                                               profile: "default", lineageRoot: root, in: context)
+        }
+
+        try CacheStore.removeHermesSession(lineageRoot: "a", profile: "default", serverURL: hermesServer, in: context)
+
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: hermesServer, profile: "default", in: context).map(\.title), ["B"])
+        XCTAssertEqual(try fetchCachedMessages(in: context).map(\.sessionID), ["hermes|default|b"])
+    }
+
+    /// A newest read after a rewind holds the rows before the cut and the new turn: the cut rows
+    /// inside its row ids go, and rows an older page brought on an earlier visit keep their
+    /// place before it.
+    func testANewestReadDropsTheRowsARewindCut() throws {
+        let context = try makeContext()
+        try cacheTip(Array(1...6), newest: 4...Int.max, in: context)
+
+        // Rewound before row 5; the new turn saved rows 7 and 8.
+        try cacheTip([3, 4, 7, 8], newest: 3...Int.max, in: context)
+
+        let cached = try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
+                                                         in: context, limit: 100)
+        XCTAssertEqual(cached.compactMap(\.rowID), [1, 2, 3, 4, 7, 8])
+        XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
+                                                           in: context, limit: 2).compactMap(\.rowID), [7, 8])
+    }
+
+    /// An undo with no later turn leaves the newest read's ids below the rows it removed, which
+    /// go all the same, since the read went back from the newest row; undoing the only exchange
+    /// leaves nothing.
+    func testANewestReadDropsTheRowsAnUndoRemoved() throws {
+        let context = try makeContext()
+        try cacheTip(Array(1...6), newest: 4...Int.max, in: context)
+
+        // Undid rows 5 and 6; the newest read stopped at row 3, which an older page holds.
+        try cacheTip([3, 4], newest: 3...Int.max, in: context)
+        XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
+                                                           in: context, limit: 100).compactMap(\.rowID), [1, 2, 3, 4])
+
+        // Undid every row left; the read found none and reached the first row.
+        try cacheTip([], newest: Int.min...Int.max, in: context)
+        XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
+                                                           in: context, limit: 100), [])
+    }
+
+    /// Two Hermes servers and a webui server never read each other's rows, and clearing one
+    /// server, as sign-out and removing it do, takes only its rows, Hermes ones included.
+    func testHermesRowsStayWithTheirServerAndClearWithIt() throws {
+        let context = try makeContext()
+        let serverA = URL(string: "https://a.hermes.example")!
+        let serverB = URL(string: "https://b.hermes.example")!
+        let webui = URL(string: "https://webui.example")!
+        for (server, title) in [(serverA, "On A"), (serverB, "On B")] {
+            try CacheStore.cacheHermesSessions([HermesSessionRow(id: "s", title: title).summary(in: "default")], profile: "default",
+                                               reachedEnd: true, serverURL: server, in: context)
+            try CacheStore.cacheHermesMessages([hermesMessage(1, root: "s")], newestRowIDs: 1...1, serverURL: server,
+                                               profile: "default", lineageRoot: "s", in: context)
+        }
+        try CacheStore.cacheSessions([SessionSummary(sessionId: "s", title: "On webui")], serverURL: webui, in: context)
+
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: serverA, profile: "default", in: context).map(\.title), ["On A"])
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: webui, profile: "default", in: context), [])
+        XCTAssertEqual(try CacheStore.cachedSessions(serverURL: webui, in: context).map(\.title), ["On webui"])
+
+        try CacheStore.clearCache(for: serverA, in: context)
+
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: serverA, profile: "default", in: context), [])
+        XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: serverA, profile: "default", lineageRoot: "s",
+                                                           in: context, limit: 10), [])
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: serverB, profile: "default", in: context).map(\.title), ["On B"])
+        XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: serverB, profile: "default", lineageRoot: "s",
+                                                           in: context, limit: 10).count, 1)
+        XCTAssertEqual(try CacheStore.cachedSessions(serverURL: webui, in: context).map(\.title), ["On webui"])
+    }
+
+    /// Hermes rows keep the TTL and the cap: an expired one never reads back and the next write
+    /// purges it, and the least recently cached messages above the cap go.
+    func testHermesRowsKeepTheTTLAndTheCap() throws {
+        let context = try makeContext()
+        let old = Date(timeIntervalSince1970: 1_770_000_000)
+        let later = old.addingTimeInterval(CachePolicy.ttl + 1)
+        try CacheStore.cacheHermesSessions([HermesSessionRow(id: "old").summary(in: "default")], profile: "default",
+                                           reachedEnd: false, serverURL: hermesServer, in: context, cachedAt: old)
+        XCTAssertEqual(try CacheStore.cachedHermesSessions(serverURL: hermesServer, profile: "default", in: context, now: later), [])
+
+        let scope = CacheStore.hermesScope(profile: "default", lineageRoot: "tip")
+        for id in 1...CachePolicy.maxMessages {
+            let key = CacheStore.hermesMessageKey(serverURL: hermesServer, profile: "default", lineageRoot: "tip", rowID: id)
+            context.insert(CachedMessage(serverURLString: hermesServer.absoluteString, sessionID: scope, message: hermesMessage(id),
+                                         sortIndex: id, cacheKey: key, cachedAt: later.addingTimeInterval(Double(id))))
+        }
+        try CacheStore.cacheHermesMessages([hermesMessage(9_999)], newestRowIDs: 9_999...9_999, serverURL: hermesServer,
+                                           profile: "default", lineageRoot: "tip", in: context,
+                                           cachedAt: later.addingTimeInterval(Double(CachePolicy.maxMessages + 1)))
+
+        XCTAssertTrue(try fetchCachedSessions(in: context).isEmpty, "the expired session was purged")
+        let rows = try fetchCachedMessages(in: context).compactMap(\.rowID)
+        XCTAssertEqual(rows.count, CachePolicy.maxMessages)
+        XCTAssertFalse(rows.contains(1), "the least recently cached message went")
+        XCTAssertTrue(rows.contains(9_999))
+    }
+
+    /// A store written before #1054's columns opens with every row, its new columns empty.
+    func testAStoreFromBeforeTheHermesColumnsOpensWithItsRows() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("cache-\(UUID().uuidString).store")
+        addTeardownBlock {
+            for suffix in ["", "-shm", "-wal"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+        }
+        let cachedAt = Date()
+        do {
+            let container = try ModelContainer(for: Schema(versionedSchema: CacheSchemaBefore1054.self),
+                                               configurations: ModelConfiguration(url: url))
+            let context = ModelContext(container)
+            context.insert(CacheSchemaBefore1054.CachedSession(cacheKey: "https://example.test|session|s1",
+                                                               serverURLString: "https://example.test", sessionID: "s1",
+                                                               title: "Before", cachedAt: cachedAt))
+            context.insert(CacheSchemaBefore1054.CachedMessage(cacheKey: "https://example.test|session|s1|message|m1",
+                                                               serverURLString: "https://example.test", sessionID: "s1",
+                                                               content: "Kept", cachedAt: cachedAt))
+            try context.save()
+        }
+
+        let context = ModelContext(try ModelContainer(for: CachedSession.self, CachedMessage.self,
+                                                      configurations: ModelConfiguration(url: url)))
+
+        let session = try XCTUnwrap(fetchCachedSessions(in: context).first)
+        XCTAssertEqual(session.title, "Before")
+        XCTAssertNil(session.lineageRoot)
+        let message = try XCTUnwrap(fetchCachedMessages(in: context).first)
+        XCTAssertEqual(message.content, "Kept")
+        XCTAssertNil(message.rowID)
+        XCTAssertEqual(try CacheStore.cachedSessions(serverURL: URL(string: "https://example.test")!, in: context).map(\.title), ["Before"])
+    }
+
+    private let hermesServer = URL(string: "https://hermes.example")!
+
+    /// Caches the held rows `ids` of session `tip` in `default`, after a newest read that covered `newest`.
+    private func cacheTip(_ ids: [Int], newest: ClosedRange<Int>, in context: ModelContext) throws {
+        try CacheStore.cacheHermesMessages(ids.map { hermesMessage($0) }, newestRowIDs: newest, serverURL: hermesServer,
+                                           profile: "default", lineageRoot: "tip", in: context)
+    }
+
+    /// A settled Hermes row as the chat's projection makes it.
+    private func hermesMessage(_ rowID: Int, root: String = "tip") -> ChatMessage {
+        ChatMessage(role: rowID.isMultiple(of: 2) ? "assistant" : "user", content: "Row \(rowID)", timestamp: Double(rowID),
+                    messageId: "\(root)/row-\(rowID)", displayMetadata: ["task_count": .number(1)], rowID: rowID)
+    }
+
     private func makeContext() throws -> ModelContext {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
@@ -1050,5 +1261,91 @@ final class CacheStoreTests: XCTestCase {
 
     private func fetchCachedMessages(in context: ModelContext) throws -> [CachedMessage] {
         try context.fetch(FetchDescriptor<CachedMessage>())
+    }
+}
+
+/// The cache's schema before #1054 added the Hermes columns, for the upgrade test.
+enum CacheSchemaBefore1054: VersionedSchema {
+    static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
+    static var models: [any PersistentModel.Type] { [CachedSession.self, CachedMessage.self] }
+
+    @Model final class CachedSession {
+        @Attribute(.unique) var cacheKey: String
+        var serverURLString: String
+        var sessionID: String
+        var title: String?
+        var workspace: String?
+        var model: String?
+        var modelProvider: String?
+        var messageCount: Int?
+        var createdAt: Double?
+        var updatedAt: Double?
+        var lastMessageAt: Double?
+        var pinned: Bool?
+        var archived: Bool?
+        var projectId: String?
+        var profile: String?
+        var inputTokens: Int?
+        var outputTokens: Int?
+        var estimatedCost: Double?
+        var activeStreamId: String?
+        var isStreaming: Bool?
+        var isCliSession: Bool?
+        var userMessageCount: Int?
+        var hasPendingUserMessage: Bool?
+        var pendingStartedAt: Double?
+        var worktreePath: String?
+        var sourceTag: String?
+        var rawSource: String?
+        var sessionSource: String?
+        var sourceLabel: String?
+        var parentSessionId: String?
+        var relationshipType: String?
+        var readOnly: Bool?
+        var isReadOnly: Bool?
+        var cachedAt: Date
+        var expiresAt: Date
+
+        init(cacheKey: String, serverURLString: String, sessionID: String, title: String, cachedAt: Date) {
+            self.cacheKey = cacheKey
+            self.serverURLString = serverURLString
+            self.sessionID = sessionID
+            self.title = title
+            self.cachedAt = cachedAt
+            expiresAt = cachedAt.addingTimeInterval(CachePolicy.ttl)
+        }
+    }
+
+    @Model final class CachedMessage {
+        @Attribute(.unique) var cacheKey: String
+        var serverURLString: String
+        var sessionID: String
+        var sortIndex: Int
+        var role: String?
+        var content: String?
+        var timestamp: Double?
+        var messageId: String?
+        var name: String?
+        var toolCallId: String?
+        var toolUseId: String?
+        var toolCallsData: Data?
+        var contentPartsData: Data?
+        var reasoning: String?
+        var attachmentsData: Data?
+        var turnTps: Double?
+        var turnDuration: Double?
+        var displayKind: String?
+        var cachedAt: Date
+        var expiresAt: Date
+
+        init(cacheKey: String, serverURLString: String, sessionID: String, content: String, cachedAt: Date) {
+            self.cacheKey = cacheKey
+            self.serverURLString = serverURLString
+            self.sessionID = sessionID
+            sortIndex = 0
+            self.content = content
+            self.cachedAt = cachedAt
+            expiresAt = cachedAt.addingTimeInterval(CachePolicy.ttl)
+        }
     }
 }

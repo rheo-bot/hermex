@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftData
 
 /// Where a Hermes server's Archived screen (#1048) reads from: the server's saved connection,
 /// the Profile it lists, and its client on the connection's shared socket.
@@ -186,8 +187,9 @@ final class ArchivedSessionsViewModel {
 
     /// Deletes an archived Hermes session through `HermesSessionDeletion`, once the host
     /// confirms; a busy or held one stays, and the screen says why. Reads still out when it
-    /// starts or ends are dropped, as a restore's are.
-    func delete(_ session: SessionSummary) async -> Bool {
+    /// starts or ends are dropped, as a restore's are. A deleted session leaves the offline
+    /// cache in `modelContext` too, where one archived elsewhere may still sit (#1054).
+    func delete(_ session: SessionSummary, modelContext: ModelContext? = nil) async -> Bool {
         guard let sessionId = Self.nonEmpty(session.sessionId), !isChanging(session) else { return false }
         deletingSessionIDs.insert(sessionId)
         actionErrorMessage = nil
@@ -199,6 +201,9 @@ final class ArchivedSessionsViewModel {
             if let refusal = HermesSessionDeletion.message(for: outcome) {
                 actionErrorMessage = refusal
                 return false
+            }
+            if let modelContext, let root = session.hermes?.lineageRoot, let listed = hermesProfile {
+                try? CacheStore.removeHermesSession(lineageRoot: root, profile: listed, serverURL: server, in: modelContext)
             }
             dropReads()
             pages.remove(sessionId)

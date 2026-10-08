@@ -38,7 +38,7 @@ to `CacheStore`. Two consequences:
 | Auth cookies | webui | `HTTPCookieStorage` (shared jar) | Cleared/queried per active server URL (#16). Same-host/different-port servers still share the jar — documented #16 limitation. |
 | Custom request headers | webui | Keychain, per-server-scoped keys (#16) | `CustomHeaderStore` is hydrated for the active server; SSE + requests source headers from the active store. |
 | Display name / initials / **Header Logo Color** | both | `ServerAccount` in the Keychain registry blob (`Models/ServerAccount.swift`) | Per-server. The **active** server's identity is mirrored into the global `@AppStorage` keys (`SessionIdentitySettings.*`, `HeaderLogoColor.storageKey`) by `ServerRegistry.mirrorIdentityToDefaults`, on activate / set-active / identity-edit / remove — **never on first insert**, so first-run/single-server behavior is unchanged. Consumers (session-list avatar, header logo tint, New Chat / Send primary-action tint) read the mirrored global keys and therefore follow the active server automatically. |
-| Offline session/message cache | webui | SwiftData (`CachedSession`, `CachedMessage`) | Keyed by `serverURLString` (the active server URL's `absoluteString`) on the unique `cacheKey` and on every read/write predicate. See below. |
+| Offline session/message cache | both | SwiftData (`CachedSession`, `CachedMessage`) | Keyed by `serverURLString` (the active server URL's `absoluteString`) on the unique `cacheKey` and on every read/write predicate. A Hermes server's rows (#1054) add the Profile and the session's lineage root to the key. See below. |
 | Session unread marks | webui | UserDefaults (`SessionUnreadStore`) | Per-server dictionary under `session-inbox-seen.<server absoluteString>`, with session IDs as keys and server `lastMessageAt` timestamps as values. A successful list load seeds new rows and prunes absent sessions; sign-out or server removal drops that server's dictionary. |
 | Default model / profile | webui | Server defaults are not persisted locally; unfinished new-chat choices can be | Settings re-fetches defaults from the **active** server. A non-empty new-chat draft may also retain that server's effective composer choices in `ChatDraftStore`, keyed by server URL plus `newChat`; removing the server discards those records. Without a saved draft, new sessions use the server's current defaults. |
 | Active project / session selection | webui | View-local `@State` only | Not persisted. Destroyed and rebuilt on switch via `.id(server)`. |
@@ -66,6 +66,27 @@ to `CacheStore`. Two consequences:
   on-device budget across all servers, not a per-server leak.
 - All call sites pass the active `server` URL: `SessionListViewModel` and
   `ChatViewModel`.
+
+### Hermes rows in the offline cache (`Persistence/CacheStore+Hermes.swift`, #1054)
+
+- A session is keyed `<server>|hermes|<Profile>|<lineage root>` (the list row's
+  identity) and keeps its tip, which it opens by, as `sessionID`. A message is
+  keyed `<server>|hermes|<Profile>|<lineage root>|row|<row id>`, with
+  `hermes|<Profile>|<lineage root>` as its `sessionID`. Each Profile has its
+  own store, so the same id in two Profiles is two rows. webui keys are
+  unchanged and can't meet these.
+- **No sweep on a partial page.** The list and a transcript arrive a page at a
+  time, so a write only upserts. A session goes when this phone deleted or
+  archived it, when a walk from the list's first page reached its end without
+  it, or by the TTL. A message goes when a newest transcript read no longer
+  holds it inside the row ids that read covered, from its oldest row on, or
+  every id once it reached the first row (a rewind or undo), or by the TTL or
+  the cap.
+- Read only while the host can't be reached (`CacheFallbackPolicy`, which also
+  reads a Hermes `BotFailure`): the list shows the Profile's cached rows and a
+  chat its newest cached page, read-only under the offline banner, until a read
+  succeeds. Sign-out, server removal and `clearCache(for:)` take the Hermes
+  rows with the server's others.
 
 ## Retained draft attachments
 
@@ -153,6 +174,7 @@ server's content even if the purge fails.
 | Cross-server stale-deletion guard (messages) | `CacheStoreTests.testCacheMessagesForOneServerDoesNotDeleteAnotherServersMessages` |
 | Session unread scoping and removal | `SessionRowAttentionStateTests.testUnreadStoreScopesEqualSessionIDsByServer`, `AuthManagerStateTests.testSignOutAndServerRemovalClearOnlyTheirUnreadMarks` |
 | Scoped clear-cache (one server cleared, other intact) | `CacheStoreTests.testClearCacheRemovesOnlyTheGivenServersData` |
+| Hermes cache rows (two Hermes servers and a webui one; per-Profile keys; cleared with their server) | `CacheStoreTests.testHermesRowsStayWithTheirServerAndClearWithIt`, `testHermesKeysCarryTheServerProfileAndLineageRoot` |
 | Per-server identity (no re-seed, mirror on activate/set-active/update/remove) | `ServerRegistryTests` (`testActivateDoesNotReseedIdentityWhenServerAlreadyExists`, `testSetActiveMirrorsTheNewActiveIdentityToDefaults`, `testUpdateMirrorsToDefaultsOnlyWhenServerIsActive`, `testReactivatingAnExistingServerMirrorsItsIdentityToDefaults`, `testActivatingANewServerDoesNotMirrorIntoEmptyDefaults`), `AuthManagerStateTests.testUpdateServerIdentityPersistsAndMirrorsTheActiveServer` |
 | Per-server browsed Kanban Board | `KanbanFeatureStateTests.testBrowsedBoardIsRestoredForTheSameServerAndIsolatedFromOthers`, `testStaleSavedBoardIsDroppedAndColdStartFallsBackToCurrentBoard` |
 | Per-server custom headers | `CustomHeaderInjectionTests` (`testSSEStreamSourcesHeadersFromActiveServerStore`, `testLaunchMigratesLegacyGlobalHeadersToActiveServerScope`), `AuthManagerStateTests` (`testSignOutLeavesOtherServerHeadersAndRegistryIntact`, `testAddServerFailureKeepsActiveServerAndItsHeaders`) |

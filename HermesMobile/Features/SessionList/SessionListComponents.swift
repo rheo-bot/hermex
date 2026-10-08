@@ -608,7 +608,7 @@ struct SessionListRowsSection: View {
     }
 
     private func sessionsErrorRow(message errorMessage: String) -> some View {
-        let content = sessionsErrorContent(fallbackMessage: errorMessage)
+        let content = Self.errorContent(for: viewModel.sessionLoadError, fallbackMessage: errorMessage)
 
         return VStack(alignment: .leading, spacing: 10) {
             SessionListStatusRow(
@@ -630,9 +630,12 @@ struct SessionListRowsSection: View {
         .padding(.horizontal, 24)
     }
 
-    private func sessionsErrorContent(fallbackMessage: String) -> (title: String, description: String) {
-        if let sessionLoadError = viewModel.sessionLoadError,
-           CacheFallbackPolicy.shouldUseCache(for: sessionLoadError) {
+    /// The error row's title and text for a list load that failed with `error`: the webui
+    /// server's unreachable copy for a failure the offline cache covers, else `fallbackMessage`.
+    /// A Hermes failure keeps its `BotConnectionAdvice` text, which names the proxy, tunnel or
+    /// socket at fault.
+    static func errorContent(for error: Error?, fallbackMessage: String) -> (title: String, description: String) {
+        if let error, !(error is BotFailure), CacheFallbackPolicy.shouldUseCache(for: error) {
             return (
                 String(localized: "Cannot reach server"),
                 String(localized: "Check that your Mac is awake and cloudflared is running.")

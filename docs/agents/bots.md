@@ -1306,6 +1306,20 @@ no `pinned`, `unread`, `hidden` or `cwd`.
 Checked against `scripts/local-hermes` at the pin: `hermes_cli/web_routers/sessions.py`
 (`search_sessions`) and `hermes_state_search.py` (`search_sessions_by_id`, `_fts_match_sql`).
 
+### Offline cache (#1054)
+
+Every list read and every settled transcript a session's chat holds go to the webui offline
+cache (`CacheStore+Hermes.swift`), keyed by server, Profile and lineage root; the keys and the
+no-sweep removal rules are in [multi-server-state-isolation.md](multi-server-state-isolation.md).
+When a list read or a chat's attach fails because the host can't be reached
+(`CacheFallbackPolicy`: a connectivity `URLError`, `.transport`, or a proxy's or tunnel's 408,
+502-504 or 520-530), the list shows the Profile's cached rows and a chat with nothing on screen
+its newest cached page, under the offline banner and read-only through `isViewingCachedData`,
+as on webui: no send, row action, history action, New Session or Archived screen. The list
+reconnects on its backoff and the chat's engine on its own; the first read that succeeds
+replaces the cached rows with the host's, which share their identities. A chat shows cached
+rows only (no tool or reasoning cards, no compaction card), and search reads only them.
+
 ## Tasks on a Hermes host
 
 The Tasks screens run on a Hermes host through `HermesCronClient` (#1040), the

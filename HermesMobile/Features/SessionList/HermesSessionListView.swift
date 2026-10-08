@@ -23,7 +23,8 @@ struct HermesSessionListEntry: Hashable, Identifiable {
 /// Its project rows are the host's folder-based project lanes (#1052): a pick filters the list to
 /// one lane, and a row's Move to Project changes the session's working folder. Its search (#1053)
 /// filters the loaded rows at once and then adds the host's matches, which reach past the loaded
-/// pages; a bot's Bot Chat among them opens in that bot.
+/// pages; a bot's Bot Chat among them opens in that bot. Every page it reads goes to the offline
+/// cache, which it shows, read-only under the offline banner, while the host can't be reached (#1054).
 struct HermesSessionListView: View {
     /// The webui list's Projects disclosure, alone.
     private static let projectRows = SidebarSectionVisibility(
@@ -33,6 +34,7 @@ struct HermesSessionListView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.modelContext) private var modelContext
     @AppStorage(SessionRowDisplaySettings.showMessageCountKey) private var showsMessageCount = true
     @AppStorage(SessionRowDisplaySettings.showWorkspaceKey) private var showsWorkspace = true
     @AppStorage(AppHaptics.isEnabledKey) private var isHapticsEnabled = true
@@ -69,6 +71,11 @@ struct HermesSessionListView: View {
 
     var body: some View {
         List {
+            if viewModel.isViewingCachedData {
+                OfflineCacheBanner()
+                    .padding(.top, 16)
+                    .sessionsScreenListRow()
+            }
             SessionSidebarUtilityRows(
                 viewModel: viewModel, topPadding: 10, automatedVisibility: .showAll, sectionVisibility: Self.projectRows,
                 profilesAreExpanded: .constant(false), projectsAreExpanded: $projectsAreExpanded,
@@ -90,7 +97,8 @@ struct HermesSessionListView: View {
             )
             // A search reads the host's whole list, so it pages nothing in.
             if showsLoadMore && !isSearching { loadMoreRow }
-            archivedRow
+            // The cache holds no archived rows to show.
+            if !viewModel.isViewingCachedData { archivedRow }
         }
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 0)
@@ -101,7 +109,7 @@ struct HermesSessionListView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 22)
         }
-        .refreshable { await viewModel.refreshHermes() }
+        .refreshable { await viewModel.refreshHermes(modelContext: modelContext) }
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search sessions")
         .autocorrectionDisabled()
         .textInputAutocapitalization(.never)
@@ -115,6 +123,7 @@ struct HermesSessionListView: View {
                 Button("New Session", systemImage: "square.and.pencil") {
                     chat = HermesSessionChat(server: entry.server, connection: entry.connection, target: .new(profile: profile))
                 }
+                .disabled(viewModel.isViewingCachedData)
             }
         }
         // Keyed by the chat, so a Profile picked in an empty chat replaces its screen (#1015).
@@ -189,7 +198,7 @@ struct HermesSessionListView: View {
             deleteSession: { session in Task { await delete(session) } },
             deleteProject: { project in Task { _ = await viewModel.delete(project) } }
         ))
-        .task { await viewModel.openHermes() }
+        .task { await viewModel.openHermes(modelContext: modelContext) }
         .onDisappear {
             actionToast.dismiss()
             if chat == nil { viewModel.closeHermes() } else { viewModel.pauseHermes() }
@@ -208,7 +217,7 @@ struct HermesSessionListView: View {
             case .background: viewModel.closeHermes()
             // Control Center and banners (`.inactive`) keep the socket; only a closed list reopens.
             case .active where chat == nil && !showingArchived && !viewModel.isHermesConnected:
-                Task { await viewModel.openHermes() }
+                Task { await viewModel.openHermes(modelContext: modelContext) }
             default: break
             }
         }
@@ -308,7 +317,7 @@ struct HermesSessionListView: View {
     /// through the app's bot route, as a notification's tap does (#1053).
     private var actions: SessionListRowActions {
         SessionListRowActions(
-            retryLoad: { Task { await viewModel.openHermes() } },
+            retryLoad: { Task { await viewModel.openHermes(modelContext: modelContext) } },
             open: { session in
                 if let bot = session.hermesBot(on: entry.server, connectionID: entry.connection.id) {
                     AppIntentRouter.shared.requestDeepLink(HermesDeepLink.botURL(for: bot))
@@ -334,7 +343,7 @@ struct HermesSessionListView: View {
                                            isBusy: viewModel.attentionState(for: session) != nil)
             },
             createProject: { session in creatingProject = HermesProjectCreation(folder: session.workspace ?? "", session: session) },
-            refreshProjects: { Task { await viewModel.openHermes() } },
+            refreshProjects: { Task { await viewModel.openHermes(modelContext: modelContext) } },
             export: { session, format in
                 Task { if let url = await viewModel.export(session, format: format) { exported = SessionExportShareItem(fileURL: url) } }
             }

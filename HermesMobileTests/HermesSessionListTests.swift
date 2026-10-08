@@ -751,6 +751,8 @@ import Observation
     var holdsSearch = false
     /// While true, `connect()` waits for `release()`.
     var holdsConnect = false
+    /// Thrown by every `connect()` while set: a host that can't be reached, or a proxy answering for it (#1054).
+    var connectFailure: Error?
     /// `projects.tree`'s reply; nil refuses the call.
     var projectTree: BotJSON?
     private(set) var attached = false
@@ -767,6 +769,7 @@ import Observation
     func connect() async throws {
         connects += 1
         if holdsConnect { await withCheckedContinuation { held.append($0) } }
+        if let connectFailure { throw connectFailure }
         attached = true
     }
     func close() {}

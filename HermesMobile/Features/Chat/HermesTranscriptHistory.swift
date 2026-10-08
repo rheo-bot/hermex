@@ -18,6 +18,10 @@ struct HermesTranscriptHistory: Equatable {
     /// A full older page added nothing: rows the chat never counted pushed the rows held into
     /// it. The next page waits until the newest rows are read again.
     private(set) var needsRecount = false
+    /// The row ids the last newest read covered: from its oldest row on, since it read back from
+    /// the newest, or every id once it reached the first row. A row the offline cache holds
+    /// inside them and these rows lack was cut on the host, by a rewind or an undo (#1054).
+    private(set) var newestRowIDs: ClosedRange<Int>?
 
     /// Where the next older page starts: the display rows held and the newer ones, counted
     /// from the newest.
@@ -38,6 +42,7 @@ struct HermesTranscriptHistory: Equatable {
     mutating func mergeNewest(_ fresh: [BotJSON], reachedStart: Bool) {
         var seen = Set<Int>()
         let fresh = fresh.filter { Self.id($0).map { seen.insert($0).inserted } == true }
+        newestRowIDs = reachedStart ? Int.min...Int.max : seen.min().map { $0...Int.max }
         if !reachedStart, let shared = rows.firstIndex(where: { Self.id($0).map(seen.contains) == true }) {
             replace(with: rows[..<shared].filter { Self.id($0).map(seen.contains) == false } + fresh)
         } else {
