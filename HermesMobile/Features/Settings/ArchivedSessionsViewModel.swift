@@ -45,6 +45,9 @@ final class ArchivedSessionsViewModel {
     /// Bumped by each read, and by each restore or delete, so only a read that began after the
     /// screen's last change applies.
     @ObservationIgnored private var readSerial = 0
+    /// Bumped each time a first-page read replaces `pages`, so a refused restore puts its row
+    /// back only into the pages it left.
+    @ObservationIgnored private var pagesRead = 0
 
     var isUnarchiving: Bool {
         !unarchivingSessionIDs.isEmpty
@@ -232,6 +235,7 @@ final class ArchivedSessionsViewModel {
             var pages = HermesSessionPages(archived: true)
             pages.append(try await wire.sessionPage(profile: profile, offset: 0, archived: true))
             guard serial == readSerial else { return }
+            pagesRead += 1
             show(pages)
         } catch {
             guard serial == readSerial, !Task.isCancelled, !Self.isCancellationError(error) else { return }
@@ -279,7 +283,8 @@ final class ArchivedSessionsViewModel {
         return profile
     }
 
-    /// Restores an archived row: it leaves at once, and a refusal puts it back where it stood.
+    /// Restores an archived row: it leaves at once, and a refusal puts it back where it stood,
+    /// unless a refresh replaced the pages meanwhile: those list it where the host has it.
     /// A read still out when the restore starts or ends could show it again, so it is dropped.
     /// When this screen's client closed before the host's answer was read (`.stale`), the
     /// restore may have landed: the row stays gone, and the screen's next load shows the host's.
@@ -292,6 +297,7 @@ final class ArchivedSessionsViewModel {
         actionErrorMessage = nil
         defer { unarchivingSessionIDs.remove(key) }
         dropReads()
+        let read = pagesRead
         let before = pages.apply(.archived(false), to: key)
         show(pages)
         do {
@@ -302,7 +308,7 @@ final class ArchivedSessionsViewModel {
             return true
         } catch {
             if error as? BotFailure == .stale { return false }
-            if let before { pages.restore(before.row, at: before.index) }
+            if let before, read == pagesRead { pages.restore(before.row, at: before.index) }
             unarchivingSessionIDs.remove(key)
             show(pages)
             if !Self.isCancellationError(error) { actionErrorMessage = hermesFailure(error) }

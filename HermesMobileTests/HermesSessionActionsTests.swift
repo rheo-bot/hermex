@@ -374,6 +374,44 @@ import Observation
         XCTAssertEqual(archive.sessions.map(\.sessionId), ["a", "c"])
     }
 
+    /// A restore the host refuses after a refresh replaced the pages leaves the refreshed pages
+    /// as the host listed them, so Load more still reaches every archived row, in order.
+    func testARestoreRefusedAfterARefreshSkipsNoRow() async throws {
+        let host = BotSocketHost()
+        let connection = host.connection(record)
+        let archived = (0...250).map { "s\($0)" }
+        _ = HermesHostFixture.configuration { request in
+            switch request.httpMethod {
+            case "PATCH": return .park
+            case "GET" where request.url?.path == "/api/sessions":
+                let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems ?? []
+                let offset = Int(query.first { $0.name == "offset" }?.value ?? "") ?? 0
+                let rows = archived.dropFirst(offset).prefix(HermesREST.sessionPageSize)
+                return .json(200, .object(["sessions": .array(rows.map { .object(["id": .string($0), "archived": .bool(true)]) })]))
+            default: return nil
+            }
+        }
+        let parked = expectation(description: "restore parked")
+        HermesHostFixture.onPark = { parked.fulfill() }
+        let archive = ArchivedSessionsViewModel(server: server, hermes: HermesArchiveSource(
+            connection: record, profile: "default", makeWire: { _ in BotClient(http: connection) }, preferences: defaults
+        ))
+        await archive.load()
+        await archive.loadMore()
+        let row = try XCTUnwrap(archive.sessions.first { $0.sessionId == "s150" })
+
+        let restore = Task { await archive.unarchive(row) }
+        await fulfillment(of: [parked], timeout: 5)
+        await archive.load()
+        HermesHostFixture.releaseParked(.json(500, .object(["detail": .string("database is locked")])))
+        let restored = await restore.value
+        for _ in 0..<5 where archive.hasMore { await archive.loadMore() }
+
+        XCTAssertFalse(restored)
+        XCTAssertNotNil(archive.actionErrorMessage)
+        XCTAssertEqual(archive.sessions.compactMap(\.sessionId), archived)
+    }
+
     /// The app leaving while the Archived screen connects ends that load, and the client it
     /// was connecting leaves too, so the screen reads afresh on return.
     func testAConnectTheScreenClosedDuringLeavesNoClient() async throws {
