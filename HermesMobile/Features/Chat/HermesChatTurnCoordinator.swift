@@ -261,6 +261,10 @@ struct HermesChatTranscript: Equatable {
 
     /// A branch's row is no longer in the history, so it can't be counted to (#1051).
     struct BranchRowGone: Error {}
+    /// The session continues an earlier one, a legacy compression segment or a reset
+    /// continuation, so the host counts that one's rows first, which this chat never reads,
+    /// and a fork could not end at a row (#1051).
+    struct BranchContinuesEarlierSession: Error {}
 
     /// The rows the host saved for a turn, from `message.complete`'s `persisted_turn`.
     struct SavedTurn: Equatable {
@@ -610,11 +614,13 @@ struct HermesChatTranscript: Equatable {
 
     /// Fork From Here, `/branch` and `/fork` (#1051): `session.branch` on the runtime, sent once,
     /// and the new session's stored key. Through `rowID`, the branch keeps the history up to that
-    /// saved row: the host counts from the session's first row (`HermesBranchCount`), so every
-    /// older page is read first. Without it, the branch copies the whole history, under `name`
-    /// when given. This chat's history is unchanged. Throws `NotSent` when it never went out,
-    /// `BranchRowGone` for a row the history no longer holds, and the host's refusal as
-    /// `BotSettingFailure`.
+    /// saved row. The host counts from the first row of the session's whole lineage, and this
+    /// chat's pages hold only its own rows, so a session whose own row continues another
+    /// (`HermesBranchParent.standsAlone`) is refused; otherwise every older page is read first
+    /// and counted (`HermesBranchCount`). Without it, the branch copies the whole history, under
+    /// `name` when given. This chat's history is unchanged. Throws `NotSent` when it never went
+    /// out, `BranchRowGone` for a row the history no longer holds,
+    /// `BranchContinuesEarlierSession`, and the host's refusal as `BotSettingFailure`.
     func branch(through rowID: Int?, name: String?) async throws -> String {
         await activate()
         guard engine.connectionState == .connected, let runtime = engine.runtime else {
@@ -622,6 +628,15 @@ struct HermesChatTranscript: Equatable {
         }
         var count: Int?
         if let rowID {
+            let own: BotJSON?
+            do {
+                guard let key = engine.storedKey else { throw BotFailure.transport }
+                own = try await engine.wire.sessionRow(key: key, profile: engine.target.profile)
+            } catch {
+                throw NotSent(underlying: error)
+            }
+            guard let own else { throw BranchRowGone() }
+            guard HermesBranchParent.standsAlone(own) else { throw BranchContinuesEarlierSession() }
             // A page that adds nothing has the newest rows read again first, so one may stall.
             var stalled = false
             while history.hasOlder {

@@ -241,6 +241,12 @@ final class ChatViewModel {
     /// Spans all three steps so the composer can show progress and disable input.
     private(set) var isSendingVoiceNote = false
     private(set) var isForkingMessage = false
+    /// A Hermes branch's "Forked from" row (#1051), once its host has said which session it
+    /// branched from (`checkHermesForkParent`).
+    private(set) var hermesForkOrigin: ForkOrigin?
+    /// The row a Hermes chat opened from named a parent, and its host has not answered yet.
+    @ObservationIgnored private var needsHermesForkCheck = false
+    @ObservationIgnored private var isCheckingHermesForkParent = false
     private(set) var isEditingMessage = false
     private(set) var isRegeneratingMessage = false
     /// A Hermes `/undo` is out (#1049). Send waits, since each one removes an exchange for good.
@@ -5124,7 +5130,8 @@ final class ChatViewModel {
     }
 
     /// Why a Hermes branch failed: nothing to copy yet (4008), the host's own words for any
-    /// other refusal, such as a name in use, or what to do when it did not go out or answer.
+    /// other refusal, such as a name in use, a fork in a session that continues another, or
+    /// what to do when it did not go out or answer.
     private func hermesBranchFailure(_ error: Error) -> String {
         switch error {
         case is HermesChatTurnCoordinator.NotSent, BotSettingFailure.rejected(4001, _):
@@ -5135,22 +5142,35 @@ final class ChatViewModel {
             return message
         case is HermesChatTurnCoordinator.BranchRowGone:
             return String(localized: "This message can’t be changed any more.")
+        case is HermesChatTurnCoordinator.BranchContinuesEarlierSession:
+            return String(localized: "This session continues an earlier one, so Fork From Here isn’t available. Run /\("branch") to copy the whole conversation.")
         default:
             return String(localized: "The server did not return the forked session ID.")
         }
     }
 
-    /// The "Forked from" row of this Hermes session, when the row it opened from named
-    /// `parentKey` and the host says it is a branch of that session (`HermesBranchParent`).
-    /// Nil without a parent, or when the host can't say.
-    func hermesForkOrigin(parentKey: String?) async -> ForkOrigin? {
-        guard let hermesTurn, parentKey != nil else { return nil }
-        await hermesTurn.activate()
+    /// Asks this Hermes chat's host whether its session is a branch of `parentKey`, the parent
+    /// the row it opened from named, and shows the answer as `hermesForkOrigin`
+    /// (`HermesBranchParent`). It asks now when the chat is attached, and otherwise, or after a
+    /// read that failed, on the next connect. A chat opened without a parent asks nothing.
+    func checkHermesForkParent(_ parentKey: String?) async {
+        needsHermesForkCheck = parentKey != nil
+        await resolveHermesForkOrigin()
+    }
+
+    private func resolveHermesForkOrigin() async {
+        guard let hermesTurn, needsHermesForkCheck, !isCheckingHermesForkParent,
+              hermesTurn.engine.connectionState == .connected, let key = hermesTurn.engine.storedKey else { return }
         let engine = hermesTurn.engine
-        guard engine.connectionState == .connected, let key = engine.storedKey,
-              let parent = try? await HermesBranchParent.row(of: key, profile: engine.target.profile, on: engine.wire)
-        else { return nil }
-        return ForkOrigin(parentSessionID: parent.id, parent: parent.summary(in: engine.target.profile))
+        isCheckingHermesForkParent = true
+        defer { isCheckingHermesForkParent = false }
+        do {
+            let parent = try await HermesBranchParent.row(of: key, profile: engine.target.profile, on: engine.wire)
+            needsHermesForkCheck = false
+            hermesForkOrigin = parent.map { ForkOrigin(parentSessionID: $0.id, parent: $0.summary(in: engine.target.profile)) }
+        } catch {
+            // Left to ask on the next connect.
+        }
     }
 
     /// The Hermes chat that opens `session` on this chat's connection: a "Forked from" row's parent.
@@ -7632,6 +7652,7 @@ extension ChatViewModel: HermesChatTurnDelegate {
             if errorMessage != nil { errorMessage = nil }
             if sendErrorIsFromStreamRecovery { sendErrorMessage = nil }
             releaseSubmissionMark()
+            if needsHermesForkCheck { Task { [weak self] in await self?.resolveHermesForkOrigin() } }
             return
         }
         // With nothing on screen yet it is the chat's error, with its retry; otherwise the composer's.

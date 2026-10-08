@@ -375,15 +375,21 @@ against `scripts/local-hermes` on both sides of an in-place compaction and after
 Fork From Here reads every older page first and counts from the first row through the chosen one;
 it is offered on any row the host saved (`rowID`). `/branch` copies everything, under its name or
 the parent's next lineage title. 4008 (nothing to copy yet) asks to send first; any other refusal,
-such as a name in use (5008), shows the host's message. A legacy compression chain's ancestors are
-in the host's projection but not in its tip's pages, so a fork there would end early; in-place
-compaction, the default at the pin, has none.
+such as a name in use (5008), shows the host's message. The host's projection is the session's
+whole lineage (`_resume_lineage_ids`): a session that continues another, a legacy compression
+segment or a reset continuation, puts that one's rows first, and its own pages never show them,
+so a fork there would end early. Fork From Here therefore reads the session's own row
+(`GET /api/sessions/{id}?profile=`) first and refuses one with a `parent_session_id` but no
+`_branched_from` (`HermesBranchParent.standsAlone`), pointing at `/branch`; a branch's lineage
+is itself. In-place compaction, the default at the pin, adds no lineage.
 
 A branch shows a "Forked from <parent>" row (`ForkOrigin`) that opens the parent. A chat opened
 from a row naming a parent (`HermesSessionChat.parentKey`) reads its own row,
 `GET /api/sessions/{id}?profile=`, and only a `_branched_from` naming that parent counts: a reset
 continuation also has a parent. The parent's row then gives its title. Each row read is the whole
-stored row, about 60 KB, so a chat opened without a parent reads none.
+stored row, about 60 KB, so a chat opened without a parent reads none. The chat asks once the
+session is attached, so a first attach that failed leaves it to the next connect
+(`ChatViewModel.checkHermesForkParent`).
 Checked against `scripts/local-hermes` at the `HERMES_AGENT_TESTED_SHA` pin (`ca678285`,
 0.21.5): a cut answers `{status: "streaming", user_row_id, survivor_user_row_ids}` and its rows
 leave the REST page; a cut row is 4018 afterwards; a running turn refuses both calls with 4009;

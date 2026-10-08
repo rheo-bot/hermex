@@ -103,10 +103,10 @@ enum HermesSessionDuplication {
     }
 }
 
-/// A Hermes session's "Forked from" row (#1051). A branch's own row names its parent
-/// (`parent_session_id`) and stores `{"_branched_from": <parent>}` as its `model_config`, which
-/// `session.branch` writes; a reset continuation or a compression segment has a parent too, but no
-/// such mark, so it is no branch.
+/// A Hermes session's parent, for its "Forked from" row and Fork From Here (#1051). A branch's
+/// own row names its parent (`parent_session_id`) and stores `{"_branched_from": <parent>}` as its
+/// `model_config`, which `session.branch` writes; a reset continuation or a compression segment
+/// has a parent too, but no such mark, so it is no branch.
 @MainActor enum HermesBranchParent {
     /// The parent's row when `key` of `profile` is a branch of a session the host still has;
     /// nil otherwise. Each read is the whole stored row, about 60 KB, so a chat reads it only
@@ -119,6 +119,14 @@ enum HermesSessionDuplication {
         let grandparent = row["parent_session_id"].text
         return HermesSessionRow(id: parent, title: row["title"].text, profile: profile,
                                 parentSessionID: grandparent?.isEmpty == false ? grandparent : nil)
+    }
+
+    /// Whether a session's own row `own` holds its whole history as the host counts a branch
+    /// (`_resume_lineage_ids`): it has no parent, or it is a branch, whose rows are a copy. Any
+    /// other parent, a legacy compression segment or a reset continuation, puts that parent's
+    /// rows first, and the session's own transcript pages never show them.
+    static func standsAlone(_ own: BotJSON) -> Bool {
+        (own["parent_session_id"].text ?? "").isEmpty || !(branchedFrom(own["model_config"]) ?? "").isEmpty
     }
 
     /// `_branched_from` in a `model_config` stored as a JSON string, or sent as an object.

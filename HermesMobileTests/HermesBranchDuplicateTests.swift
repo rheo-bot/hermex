@@ -67,6 +67,8 @@ import Observation
         let opened = await chat.model.forkHermesSession(from: context)
 
         XCTAssertEqual(chat.writes("session.branch"), [["session_id": .string("runtime"), "count": .number(6)]])
+        XCTAssertEqual(HermesHostFixture.requests.filter { $0.url?.path == "/api/sessions/tip" }.map(\.url?.query),
+                       ["profile=default"], "the session's own row, read once")
         XCTAssertEqual(opened?.target, .session(profile: "default", key: "fork"))
         XCTAssertEqual(opened?.parentKey, "tip")
         XCTAssertNil(chat.model.messageActionErrorMessage)
@@ -85,6 +87,39 @@ import Observation
 
         XCTAssertEqual(chat.pages.offsets, [0, 100, 200])
         XCTAssertEqual(chat.writes("session.branch"), [["session_id": .string("runtime"), "count": .number(150)]])
+    }
+
+    /// The host counts from the first row of every session this one continues, which this chat's
+    /// pages never hold, so a fork in a session whose own row has a parent other than the one it
+    /// branched from is refused before anything is read or sent, and `/branch` still copies all of
+    /// it. A branch of a branch stands alone, so it forks.
+    func testAForkInASessionThatContinuesAnotherIsRefused() async throws {
+        var config: BotJSON = .string("{\"_reset_from\": \"root\"}")
+        let chat = await openChat(pages: [0: twoToolTurns]) { request in
+            guard request.url?.path == "/api/sessions/tip" else { return nil }
+            return .json(200, .object(["id": .string("tip"), "parent_session_id": .string("root"), "model_config": config]))
+        }
+        chat.host.always("session.branch", .init(result: branched("fork")))
+        let reply = try XCTUnwrap(chat.model.messages.firstIndex { $0.rowID == 4 })
+        let context = try XCTUnwrap(chat.model.actionContext(for: chat.model.messages[reply], visibleIndex: reply))
+
+        for continuation in [config, .null] {
+            config = continuation
+            let refused = await chat.model.forkHermesSession(from: context)
+            XCTAssertNil(refused)
+            XCTAssertEqual(chat.model.messageActionErrorMessage,
+                           "This session continues an earlier one, so Fork From Here isn’t available. Run /branch to copy the whole conversation.")
+        }
+        XCTAssertEqual(chat.writes("session.branch"), [])
+
+        let whole = await chat.model.runHermesSlashCommand("/branch")
+        guard case .openedHermesSession? = whole else { return XCTFail("Expected /branch to open the branch") }
+        XCTAssertEqual(chat.writes("session.branch"), [["session_id": .string("runtime")]])
+
+        config = .string("{\"_branched_from\": \"root\"}")
+        let forked = await chat.model.forkHermesSession(from: context)
+        XCTAssertEqual(forked?.target, .session(profile: "default", key: "fork"))
+        XCTAssertEqual(chat.writes("session.branch").last, ["session_id": .string("runtime"), "count": .number(3)])
     }
 
     /// A prompt the host has not saved yet has no row to count to, so it offers no fork.
@@ -145,19 +180,10 @@ import Observation
     /// parent. A reset continuation also has a parent, but is no branch, so it gets no row.
     func testABranchShowsForkedFromItsParentAndAResetChildDoesNot() async throws {
         var config = "{\"_branched_from\": \"parent\"}"
-        let chat = await openChat(pages: [0: twoToolTurns]) { request in
-            switch request.url?.path {
-            case "/api/sessions/tip":
-                return .json(200, .object(["id": .string("tip"), "parent_session_id": .string("parent"),
-                                           "model_config": .string(config), "archived": .number(0)]))
-            case "/api/sessions/parent":
-                return .json(200, .object(["id": .string("parent"), "title": .string("Plan the launch"),
-                                           "parent_session_id": .null, "model_config": .null, "pinned": .number(0)]))
-            default: return nil
-            }
-        }
+        let chat = await openChat(pages: [0: twoToolTurns]) { Self.branchRows($0, config: config) }
 
-        let origin = await chat.model.hermesForkOrigin(parentKey: "parent")
+        await chat.model.checkHermesForkParent("parent")
+        let origin = chat.model.hermesForkOrigin
         XCTAssertEqual(origin?.title, "Forked from Plan the launch")
         XCTAssertEqual(origin?.parentSessionID, "parent")
         let parent = try XCTUnwrap(origin?.parent)
@@ -166,11 +192,28 @@ import Observation
         XCTAssertEqual(HermesHostFixture.requests.first { $0.url?.path == "/api/sessions/tip" }?.url?.query, "profile=default")
 
         config = "{\"_reset_from\": \"parent\"}"
-        let reset = await chat.model.hermesForkOrigin(parentKey: "parent")
-        XCTAssertNil(reset)
-        let unopened = await chat.model.hermesForkOrigin(parentKey: nil)
-        XCTAssertNil(unopened)
+        await chat.model.checkHermesForkParent("parent")
+        XCTAssertNil(chat.model.hermesForkOrigin)
+        await chat.model.checkHermesForkParent(nil)
         XCTAssertEqual(HermesHostFixture.count("/api/sessions/tip"), reads + 1, "a chat opened without a parent reads nothing")
+    }
+
+    /// The chat asks once as it opens; when its first attach failed, the connect that follows
+    /// asks again, so a branch opened on a cold or dropped connection still gets its row.
+    func testForkedFromWaitsForALaterAttach() async {
+        let (retry, release) = AsyncStream<Void>.makeStream()
+        let chat = await openChat(pages: [0: twoToolTurns], refusedFirst: true, reconnectDelay: { _ in
+            for await _ in retry { return }
+        }) { Self.branchRows($0, config: "{\"_branched_from\": \"parent\"}") }
+
+        await chat.model.checkHermesForkParent("parent")
+        XCTAssertNil(chat.model.hermesForkOrigin)
+        XCTAssertEqual(HermesHostFixture.count("/api/sessions/tip"), 0, "nothing to ask before the chat attaches")
+
+        release.yield()
+        await waitUntil("the reconnect asks again") { chat.model.hermesForkOrigin != nil }
+        XCTAssertEqual(chat.model.hermesForkOrigin?.title, "Forked from Plan the launch")
+        XCTAssertEqual(HermesHostFixture.count("/api/sessions/tip"), 1)
     }
 
     // MARK: Duplicate
@@ -324,10 +367,14 @@ import Observation
     }
 
     /// A chat attached to an idle session `tip` in `default` on runtime `runtime`, whose history
-    /// the host serves as `pages`, by offset; `answer` serves any other REST route first.
-    private func openChat(pages: [Int: [BotJSON]],
+    /// the host serves as `pages`, by offset; `answer` serves any other REST route first, and
+    /// `tip`'s own row otherwise has no parent. `refusedFirst` refuses the first attach (4007),
+    /// which the engine retries after `reconnectDelay`.
+    private func openChat(pages: [Int: [BotJSON]], refusedFirst: Bool = false,
+                          reconnectDelay: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
                           _ answer: @escaping (URLRequest) -> HermesHostFixture.Reply? = { _ in nil }) async -> Chat {
         let host = BotSocketHost()
+        if refusedFirst { host.next("session.resume", .init(error: 4007)) }
         host.always("session.resume", .init(result: .object([
             "session_id": .string("runtime"), "session_key": .string("tip"), "running": .bool(false),
             "messages": .array([]), "info": .object(["profile_name": .string("default")])
@@ -335,16 +382,19 @@ import Observation
         host.always("session.events.since", .init(result: BotFixtureWire.replay(latest: 0)))
         let connection = host.connection(record)
         let script = Pages(pages)
-        _ = HermesHostFixture.configuration { script.answer($0) ?? answer($0) }
+        _ = HermesHostFixture.configuration { request in
+            script.answer(request) ?? answer(request) ?? (request.url?.path == "/api/sessions/tip"
+                ? .json(200, .object(["id": .string("tip"), "parent_session_id": .null, "model_config": .null])) : nil)
+        }
         let engine = HermesConversation(server: server, connection: record, target: .session(profile: "default", key: "tip"),
-                                        wire: BotClient(http: connection))
+                                        wire: BotClient(http: connection), reconnectDelay: reconnectDelay)
         let turn = HermesChatTurnCoordinator(engine: engine, isNetworkAvailable: { true })
         let model = ChatViewModel(
             session: SessionSummary(profile: "default"), server: server, streamingScrollCoalescingDelayNanoseconds: 0,
             draftStore: ChatDraftStore(persistence: BotMemoryDrafts(), debounceDuration: .seconds(60)), backend: .hermes(turn)
         )
         await model.loadMessages()
-        XCTAssertEqual(engine.connectionState, .connected)
+        XCTAssertEqual(engine.connectionState == .connected, !refusedFirst)
         return Chat(model: model, turn: turn, host: host, connection: connection, pages: script)
     }
 
@@ -442,6 +492,32 @@ import Observation
     private func branched(_ key: String, runtime: String = "branch-runtime") -> BotJSON {
         .object(["session_id": .string(runtime), "stored_session_id": .string(key), "title": .string("branch"),
                  "parent": .string("tip"), "message_count": .number(6), "messages": .array([]), "info": .object([:])])
+    }
+
+    /// `tip`'s own row, a branch whose `model_config` is `config`, and its parent's row, titled
+    /// "Plan the launch".
+    private static func branchRows(_ request: URLRequest, config: String) -> HermesHostFixture.Reply? {
+        switch request.url?.path {
+        case "/api/sessions/tip":
+            return .json(200, .object(["id": .string("tip"), "parent_session_id": .string("parent"),
+                                       "model_config": .string(config), "archived": .number(0)]))
+        case "/api/sessions/parent":
+            return .json(200, .object(["id": .string("parent"), "title": .string("Plan the launch"),
+                                       "parent_session_id": .null, "model_config": .null, "pinned": .number(0)]))
+        default: return nil
+        }
+    }
+
+    /// Waits on observation, never a clock, until `condition` holds.
+    private func waitUntil(_ description: String, file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: @escaping @MainActor () -> Bool) async {
+        while !condition() {
+            let changed = XCTestExpectation(description: description)
+            withObservationTracking { _ = condition() } onChange: { changed.fulfill() }
+            guard await XCTWaiter().fulfillment(of: [changed], timeout: 5) == .completed else {
+                return XCTFail("Nothing changed while waiting for: \(description)", file: file, line: line)
+            }
+        }
     }
 
     private static func body(_ request: URLRequest) -> BotJSON {
