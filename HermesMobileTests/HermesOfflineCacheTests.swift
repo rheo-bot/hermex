@@ -186,6 +186,34 @@ import XCTest
         XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello.", "Sent from Desktop"])
     }
 
+    /// A reattach whose history read fails keeps the cached transcript, read-only, and says why;
+    /// the chat's retry puts the host's rows in its place.
+    func testAFailedHistoryReadKeepsTheCachedTranscriptUntilARetry() async throws {
+        let context = try makeContext()
+        let visit = makeChat(HermesOfflineWire(rows: [row(1, "user", "Hi"), row(2, "assistant", "Hello.")]))
+        await visit.model.loadMessages(modelContext: context)
+
+        let wire = HermesOfflineWire(rows: [row(1, "user", "Hi"), row(2, "assistant", "Hello."), row(3, "user", "Sent from Desktop")])
+        wire.connectFailure = URLError(.cannotConnectToHost)
+        let chat = makeChat(wire)
+        await chat.model.loadMessages(modelContext: context)
+        XCTAssertTrue(chat.model.isViewingCachedData)
+
+        wire.connectFailure = nil
+        wire.messagesFailure = BotFailure.rejected(502)
+        chat.reconnect.open()
+        await waitUntil("reattached") { chat.model.errorMessage != nil }
+
+        XCTAssertTrue(chat.model.isViewingCachedData)
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello."])
+
+        wire.messagesFailure = nil
+        await chat.model.loadMessages(modelContext: context)
+
+        XCTAssertFalse(chat.model.isViewingCachedData)
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello.", "Sent from Desktop"])
+    }
+
     /// The exchange an undo removed, here on another client, leaves the cached transcript at the
     /// next visit's newest read, though that read's row ids all sit below it.
     func testAVisitAfterAnUndoDropsTheUndoneRows() async throws {
@@ -303,13 +331,15 @@ import XCTest
 
 /// A Hermes host for one idle session, `tip` in `default`: its attach calls and its newest
 /// transcript page. `connectFailure` stands for a host it can't reach, or one that refuses;
-/// `replayFailure` for a socket lost once the host named the runtime.
+/// `replayFailure` for a socket lost once the host named the runtime, `messagesFailure` for a
+/// transcript read that fails.
 @MainActor private final class HermesOfflineWire: BotTransport {
     var replayEpoch: String? = "epoch"
     var onEvent: ((BotJSON) -> Void)?
     var onDisconnect: ((Error) -> Void)?
     var connectFailure: Error?
     var replayFailure: Error?
+    var messagesFailure: Error?
     var rows: [BotJSON]
     private(set) var methods: [String] = []
 
@@ -336,6 +366,7 @@ import XCTest
     }
 
     func sessionMessages(_ key: String, profile: String, offset: Int?) async throws -> [BotJSON]? {
-        offset == 0 ? rows : []
+        if let messagesFailure { throw messagesFailure }
+        return offset == 0 ? rows : []
     }
 }

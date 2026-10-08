@@ -7407,8 +7407,13 @@ extension ChatViewModel: HermesChatTurnDelegate {
     }
 
     func hermesReplaceTranscript(_ transcript: HermesChatTranscript) {
-        // The host's own rows replace a cached copy, which shares their ids.
-        if isViewingCachedData { isViewingCachedData = false }
+        // The host's own rows replace a cached copy, which shares their ids. A rebuild whose
+        // history read failed has none, so the cached copy stays, read-only, until the chat's
+        // retry or a later read succeeds.
+        if isViewingCachedData {
+            guard transcript.newestRowIDs != nil else { return }
+            isViewingCachedData = false
+        }
         resetPendingStreamingContentBuffers()
         let next = Self.hermesKeepingOwnRows(of: messages, in: transcript.messages + transcript.live)
             + (transcript.streamingReply.map { [$0] } ?? [])
