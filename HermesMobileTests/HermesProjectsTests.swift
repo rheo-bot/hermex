@@ -265,17 +265,16 @@ import Observation
     }
 
     /// New Project from a row's Move menu ends with the session in the project: saved on the
-    /// session's own folder, or a parent of it, the session is already the project's; saved on
-    /// another, it asks the same Move to Project. The list's New Project moves nothing.
+    /// session's own folder, the session is already the project's; saved on any other, a parent
+    /// included (a deeper project may still claim it), it asks the same Move to Project. The
+    /// list's New Project moves nothing.
     func testANewProjectFromAMoveMenuAsksToMoveTheSessionOnlyWhenItWorksElsewhere() throws {
         let session = SessionSummary(sessionId: "a", workspace: "/Users/me/launch/app", profile: "default")
         let fromMenu = HermesProjectCreation(folder: "/Users/me/launch/app", session: session)
 
         XCTAssertNil(HermesProjectCreation(folder: "").move(intoProjectNamed: "Launch", savedOn: "/Users/me/other", isBusy: false))
         XCTAssertNil(fromMenu.move(intoProjectNamed: "Launch", savedOn: "/Users/me/launch/app", isBusy: false))
-        XCTAssertNil(fromMenu.move(intoProjectNamed: "Launch", savedOn: "/Users/me/launch", isBusy: false))
-        XCTAssertNotNil(fromMenu.move(intoProjectNamed: "Launch", savedOn: "/Users/me/launch/ap", isBusy: false),
-                        "a sibling folder sharing a prefix is not a parent")
+        XCTAssertEqual(fromMenu.move(intoProjectNamed: "Launch", savedOn: "/Users/me/launch", isBusy: false)?.folder, "/Users/me/launch")
         let move = try XCTUnwrap(fromMenu.move(intoProjectNamed: " Other ", savedOn: "/Users/me/other", isBusy: true))
         XCTAssertEqual(move.session.sessionId, "a")
         XCTAssertEqual(move.folder, "/Users/me/other")

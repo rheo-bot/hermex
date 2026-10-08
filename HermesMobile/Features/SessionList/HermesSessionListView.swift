@@ -372,12 +372,11 @@ struct HermesProjectCreation: Identifiable {
     var session: SessionSummary?
 
     /// The Move to Project that puts `session` in the project just saved on `folder`, which asks
-    /// first as any other does. Nil from the list's New Project, or when the session already
-    /// works in or under `folder`, which makes it the project's.
+    /// first as any other does. Nil from the list's New Project, or when the session works in
+    /// `folder` itself, which makes it the project's. A session under `folder` is asked too: a
+    /// project on a deeper folder may still claim it.
     func move(intoProjectNamed name: String, savedOn folder: String, isBusy: Bool) -> HermesProjectMove? {
-        guard let session else { return nil }
-        let current = session.workspace ?? ""
-        guard current != folder, !current.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/") else { return nil }
+        guard let session, session.workspace != folder else { return nil }
         return HermesProjectMove(session: session, projectName: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                  folder: folder, isBusy: isBusy)
     }
