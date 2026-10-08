@@ -7411,7 +7411,7 @@ extension ChatViewModel: HermesChatTurnDelegate {
         // history read failed has none, so the cached copy stays, read-only, until the chat's
         // retry or a later read succeeds.
         if isViewingCachedData {
-            guard transcript.newestRowIDs != nil else { return }
+            guard transcript.newestCoverage != nil else { return }
             isViewingCachedData = false
         }
         resetPendingStreamingContentBuffers()
@@ -7456,15 +7456,23 @@ extension ChatViewModel: HermesChatTurnDelegate {
         cacheHermesHistory(transcript)
     }
 
-    func hermesHistoryDidFail(_ message: String) {
+    func hermesHistoryDidFail(_ error: Error, message: String) {
+        guard !showCachedHermesTranscript(after: error) else { return }
         errorMessage = message
     }
 
-    /// A chat with nothing on screen whose host can't be reached shows the newest page of its
-    /// cached transcript, read-only (`isViewingCachedData`), as a webui chat does offline. The
-    /// engine keeps reattaching, and the host's transcript replaces it once one succeeds.
     func hermesAttachDidFail(_ error: Error) {
-        guard messages.isEmpty, CacheFallbackPolicy.shouldUseCache(for: error), let scope = hermesCacheScope() else { return }
+        showCachedHermesTranscript(after: error)
+    }
+
+    /// A chat with nothing on screen whose host can't be reached, to attach or to read its
+    /// history, shows the newest page of its cached transcript, read-only
+    /// (`isViewingCachedData`), as a webui chat does offline. The engine keeps reattaching, and
+    /// the host's transcript replaces it once a read succeeds, as the chat's retry's does.
+    /// Returns whether it shows the cached copy.
+    @discardableResult
+    private func showCachedHermesTranscript(after error: Error) -> Bool {
+        guard messages.isEmpty, CacheFallbackPolicy.shouldUseCache(for: error), let scope = hermesCacheScope() else { return false }
         let cached: [ChatMessage]
         do {
             cached = try CacheStore.cachedHermesMessages(serverURL: scope.server, profile: scope.profile,
@@ -7472,9 +7480,9 @@ extension ChatViewModel: HermesChatTurnDelegate {
                                                          limit: HermesREST.transcriptPageSize)
         } catch {
             cacheErrorMessage = error.localizedDescription
-            return
+            return false
         }
-        guard !cached.isEmpty else { return }
+        guard !cached.isEmpty else { return false }
         messagesOffset = Self.hermesTranscriptBase
         messages = cached
         transcriptRevision &+= 1
@@ -7487,13 +7495,14 @@ extension ChatViewModel: HermesChatTurnDelegate {
         hermesCompaction = nil
         recomputeCompressionReferenceCard()
         transcriptRelayoutScrollToken += 1
+        return true
     }
 
     /// Writes the settled history a Hermes transcript holds to the offline cache (#1054).
     private func cacheHermesHistory(_ transcript: HermesChatTranscript) {
         guard let scope = hermesCacheScope() else { return }
         do {
-            try CacheStore.cacheHermesMessages(transcript.messages, newestRowIDs: transcript.newestRowIDs,
+            try CacheStore.cacheHermesMessages(transcript.messages, newestCoverage: transcript.newestCoverage,
                                                serverURL: scope.server, profile: scope.profile, lineageRoot: scope.root,
                                                in: scope.context)
         } catch {

@@ -1037,7 +1037,7 @@ final class CacheStoreTests: XCTestCase {
         let row = HermesSessionRow(id: "tip", title: "Chain", preview: "First prompt", lastActive: 1_770_000_000, unread: true,
                                    lineageRootID: "root").summary(in: "default")
         try CacheStore.cacheHermesSessions([row], profile: "default", reachedEnd: false, serverURL: hermesServer, in: context)
-        try CacheStore.cacheHermesMessages([hermesMessage(7)], newestRowIDs: 7...7, serverURL: hermesServer,
+        try CacheStore.cacheHermesMessages([hermesMessage(7)], newestCoverage: .from(rowIDs: [7]), serverURL: hermesServer,
                                            profile: "default", lineageRoot: "root", in: context)
 
         let session = try XCTUnwrap(fetchCachedSessions(in: context).first)
@@ -1091,7 +1091,7 @@ final class CacheStoreTests: XCTestCase {
         let rows = ["a", "b"].map { HermesSessionRow(id: $0, title: $0.uppercased()).summary(in: "default") }
         try CacheStore.cacheHermesSessions(rows, profile: "default", reachedEnd: true, serverURL: hermesServer, in: context)
         for root in ["a", "b"] {
-            try CacheStore.cacheHermesMessages([hermesMessage(1, root: root)], newestRowIDs: 1...1, serverURL: hermesServer,
+            try CacheStore.cacheHermesMessages([hermesMessage(1, root: root)], newestCoverage: .from(rowIDs: [1]), serverURL: hermesServer,
                                                profile: "default", lineageRoot: root, in: context)
         }
 
@@ -1106,10 +1106,10 @@ final class CacheStoreTests: XCTestCase {
     /// place before it.
     func testANewestReadDropsTheRowsARewindCut() throws {
         let context = try makeContext()
-        try cacheTip(Array(1...6), newest: 4...Int.max, in: context)
+        try cacheTip(Array(1...6), newest: .from(rowIDs: [4, 5, 6]), in: context)
 
         // Rewound before row 5; the new turn saved rows 7 and 8.
-        try cacheTip([3, 4, 7, 8], newest: 3...Int.max, in: context)
+        try cacheTip([3, 4, 7, 8], newest: .from(rowIDs: [3, 4, 7, 8]), in: context)
 
         let cached = try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
                                                          in: context, limit: 100)
@@ -1123,17 +1123,32 @@ final class CacheStoreTests: XCTestCase {
     /// leaves nothing.
     func testANewestReadDropsTheRowsAnUndoRemoved() throws {
         let context = try makeContext()
-        try cacheTip(Array(1...6), newest: 4...Int.max, in: context)
+        try cacheTip(Array(1...6), newest: .from(rowIDs: [4, 5, 6]), in: context)
 
         // Undid rows 5 and 6; the newest read stopped at row 3, which an older page holds.
-        try cacheTip([3, 4], newest: 3...Int.max, in: context)
+        try cacheTip([3, 4], newest: .from(rowIDs: [3, 4]), in: context)
         XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
                                                            in: context, limit: 100).compactMap(\.rowID), [1, 2, 3, 4])
 
         // Undid every row left; the read found none and reached the first row.
-        try cacheTip([], newest: Int.min...Int.max, in: context)
+        try cacheTip([], newest: .all, in: context)
         XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
                                                            in: context, limit: 100), [])
+    }
+
+    /// A compaction re-inserts the session's first rows under new, higher ids, so they show
+    /// before rows with lower ones. A newest read that stopped short of them never covered them,
+    /// so they stay cached.
+    func testANewestReadKeepsTheCompactedHeadRowsItNeverReached() throws {
+        let context = try makeContext()
+        try cacheTip([1001, 1002, 3, 4, 1003, 1004, 1005], newest: .all, in: context)
+
+        // Reopened: the newest read went back to row 4 only, and a turn saved row 1006.
+        try cacheTip([4, 1003, 1004, 1005, 1006], newest: .from(rowIDs: [4, 1003, 1004, 1005, 1006]), in: context)
+
+        XCTAssertEqual(try CacheStore.cachedHermesMessages(serverURL: hermesServer, profile: "default", lineageRoot: "tip",
+                                                           in: context, limit: 100).compactMap(\.rowID),
+                       [1001, 1002, 3, 4, 1003, 1004, 1005, 1006])
     }
 
     /// Two Hermes servers and a webui server never read each other's rows, and clearing one
@@ -1146,7 +1161,7 @@ final class CacheStoreTests: XCTestCase {
         for (server, title) in [(serverA, "On A"), (serverB, "On B")] {
             try CacheStore.cacheHermesSessions([HermesSessionRow(id: "s", title: title).summary(in: "default")], profile: "default",
                                                reachedEnd: true, serverURL: server, in: context)
-            try CacheStore.cacheHermesMessages([hermesMessage(1, root: "s")], newestRowIDs: 1...1, serverURL: server,
+            try CacheStore.cacheHermesMessages([hermesMessage(1, root: "s")], newestCoverage: .from(rowIDs: [1]), serverURL: server,
                                                profile: "default", lineageRoot: "s", in: context)
         }
         try CacheStore.cacheSessions([SessionSummary(sessionId: "s", title: "On webui")], serverURL: webui, in: context)
@@ -1182,7 +1197,7 @@ final class CacheStoreTests: XCTestCase {
             context.insert(CachedMessage(serverURLString: hermesServer.absoluteString, sessionID: scope, message: hermesMessage(id),
                                          sortIndex: id, cacheKey: key, cachedAt: later.addingTimeInterval(Double(id))))
         }
-        try CacheStore.cacheHermesMessages([hermesMessage(9_999)], newestRowIDs: 9_999...9_999, serverURL: hermesServer,
+        try CacheStore.cacheHermesMessages([hermesMessage(9_999)], newestCoverage: .from(rowIDs: [9_999]), serverURL: hermesServer,
                                            profile: "default", lineageRoot: "tip", in: context,
                                            cachedAt: later.addingTimeInterval(Double(CachePolicy.maxMessages + 1)))
 
@@ -1228,8 +1243,8 @@ final class CacheStoreTests: XCTestCase {
     private let hermesServer = URL(string: "https://hermes.example")!
 
     /// Caches the held rows `ids` of session `tip` in `default`, after a newest read that covered `newest`.
-    private func cacheTip(_ ids: [Int], newest: ClosedRange<Int>, in context: ModelContext) throws {
-        try CacheStore.cacheHermesMessages(ids.map { hermesMessage($0) }, newestRowIDs: newest, serverURL: hermesServer,
+    private func cacheTip(_ ids: [Int], newest: HermesNewestCoverage, in context: ModelContext) throws {
+        try CacheStore.cacheHermesMessages(ids.map { hermesMessage($0) }, newestCoverage: newest, serverURL: hermesServer,
                                            profile: "default", lineageRoot: "tip", in: context)
     }
 

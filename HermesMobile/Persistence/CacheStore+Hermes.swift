@@ -151,13 +151,13 @@ extension CacheStore {
     /// Upserts a Hermes session's settled history as the chat holds it, `messages` in its
     /// order: the rows held, back from the newest. Rows without a `rowID` (the running turn's,
     /// the chat's own) are skipped. A cached row not held here, from an older page an earlier
-    /// visit read, keeps its place before them, unless `newestRowIDs`, the row ids the last
-    /// newest read covered (`HermesTranscriptHistory.newestRowIDs`), holds its id: then the host
-    /// cut it, and it goes.
+    /// visit read, keeps its place before them, unless it sits in the part the last newest read
+    /// covered (`newestCoverage`): after the first of that read's rows the cache holds, or
+    /// anywhere once it reached the first row. Then the host cut it, and it goes.
     @MainActor
     static func cacheHermesMessages(
         _ messages: [ChatMessage],
-        newestRowIDs: ClosedRange<Int>?,
+        newestCoverage: HermesNewestCoverage?,
         serverURL: URL,
         profile: String,
         lineageRoot: String,
@@ -177,9 +177,15 @@ extension CacheStore {
         let key = { (id: Int) in hermesMessageKey(serverURL: serverURL, profile: profile, lineageRoot: lineageRoot, rowID: id) }
         let heldKeys = Set(held.map { key($0.id) })
 
+        // Where the newest read's part starts in the cache's order.
+        let covered: Int? = switch newestCoverage {
+        case .all?: Int.min
+        case .from(let ids)?: ids.lazy.compactMap { cachedByKey[key($0)]?.sortIndex }.first
+        case nil: nil
+        }
         var start = 0
         for row in cached where !heldKeys.contains(row.cacheKey) {
-            if let id = row.rowID, newestRowIDs?.contains(id) == true {
+            if let covered, row.sortIndex > covered {
                 context.delete(row)
             } else {
                 start = max(start, row.sortIndex + 1)

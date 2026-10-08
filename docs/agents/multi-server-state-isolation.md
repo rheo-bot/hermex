@@ -79,9 +79,10 @@ to `CacheStore`. Two consequences:
   time, so a write only upserts. A session goes when this phone deleted or
   archived it, when a walk from the list's first page reached its end without
   it, or by the TTL. A message goes when a newest transcript read no longer
-  holds it inside the row ids that read covered, from its oldest row on, or
-  every id once it reached the first row (a rewind or undo), or by the TTL or
-  the cap.
+  holds it inside the part that read covered: after the first of its rows the
+  cache holds, by cached position, or anywhere once it reached the first row (a
+  rewind or undo). Position, not id, since a compaction re-inserts the first
+  rows under higher ids. Otherwise it goes by the TTL or the cap.
 - Read only while the host can't be reached (`CacheFallbackPolicy`, which also
   reads a Hermes `BotFailure`): the list shows the Profile's cached rows and a
   chat its newest cached page, read-only under the offline banner, until a read

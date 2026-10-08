@@ -214,6 +214,29 @@ import XCTest
         XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello.", "Sent from Desktop"])
     }
 
+    /// An attach that succeeds but whose first history read the host can't serve (a tunnel's
+    /// 502) shows the cached transcript, read-only, as a failed attach does; the chat's retry
+    /// puts the host's rows in its place.
+    func testAFirstHistoryReadThatFailsShowsTheCachedTranscript() async throws {
+        let context = try makeContext()
+        let visit = makeChat(HermesOfflineWire(rows: [row(1, "user", "Hi"), row(2, "assistant", "Hello.")]))
+        await visit.model.loadMessages(modelContext: context)
+
+        let wire = HermesOfflineWire(rows: [row(1, "user", "Hi"), row(2, "assistant", "Hello."), row(3, "user", "Sent from Desktop")])
+        wire.messagesFailure = BotFailure.rejected(502)
+        let chat = makeChat(wire)
+        await chat.model.loadMessages(modelContext: context)
+
+        XCTAssertTrue(chat.model.isViewingCachedData)
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello."])
+
+        wire.messagesFailure = nil
+        await chat.model.loadMessages(modelContext: context)
+
+        XCTAssertFalse(chat.model.isViewingCachedData)
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello.", "Sent from Desktop"])
+    }
+
     /// The exchange an undo removed, here on another client, leaves the cached transcript at the
     /// next visit's newest read, though that read's row ids all sit below it.
     func testAVisitAfterAnUndoDropsTheUndoneRows() async throws {
