@@ -1249,7 +1249,11 @@ extension HermesChatTurnCoordinator: HermesConversationOwner {
         reconcile(with: snapshot)
     }
 
+    /// An attach that failed before any newest read succeeded makes the next one read and
+    /// rebuild: one that failed after the host named the runtime leaves the next attach, on
+    /// the same runtime, no lost frames to rebuild for, and the history would go unread.
     func conversationDidFailToAttach(_ error: Error) {
+        if history.newestRowIDs == nil { needsRebuild = true }
         delegate?.hermesAttachDidFail(error)
     }
 

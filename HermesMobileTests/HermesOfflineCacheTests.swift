@@ -65,6 +65,33 @@ import XCTest
                        ["Pinned", "Later", "Newest", "Chain"])
     }
 
+    /// A search typed while the list shows cached rows filters them at once, and asks the host
+    /// once a read replaces them, so a match the cache lacks shows too.
+    func testASearchWhileCachedReachesTheHostOnceItAnswers() async throws {
+        let context = try makeContext()
+        let rows = [HermesSessionRow(id: "plan", title: "Nimbus plan", lastActive: 20)]
+        let online = HermesSessionListWire()
+        online.pages["default"] = [0: HermesSessionPage(rows: rows)]
+        await makeList(online).openHermes(modelContext: context)
+
+        let wire = HermesSessionListWire()
+        wire.connectFailure = URLError(.cannotConnectToHost)
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old chat", profile: "default"),
+                                                        snippet: "the >>>nimbus<<< cluster")]
+        let list = makeList(wire)
+        await list.openHermes(modelContext: context)
+        await list.searchSessions(query: "nimbus", debounceNanoseconds: 0)
+        XCTAssertTrue(list.isViewingCachedData)
+        XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["plan"])
+
+        wire.connectFailure = nil
+        wire.pages["default"] = [0: HermesSessionPage(rows: rows)]
+        await list.openHermes()
+
+        XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["plan", "old"])
+        XCTAssertEqual(wire.searches.map(\.query), ["nimbus"])
+    }
+
     /// With nothing cached, a list whose proxy answers for a host that isn't there says so in the
     /// connection's own words, not a webui server's unreachable copy.
     func testAnUnreachableHostWithNothingCachedKeepsItsAdvice() async throws {
@@ -135,6 +162,28 @@ import XCTest
 
         XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello.", "Sent from Desktop"])
         XCTAssertFalse(wire.methods.contains("prompt.submit"))
+    }
+
+    /// An attach that fails after the host named the session's runtime, here as its replay is
+    /// read, shows the cached transcript. The next attach, on the same runtime, still reads the
+    /// host's rows in its place.
+    func testAnAttachThatFailsMidwayStillReadsTheHostsRowsOnReconnect() async throws {
+        let context = try makeContext()
+        let visit = makeChat(HermesOfflineWire(rows: [row(1, "user", "Hi"), row(2, "assistant", "Hello.")]))
+        await visit.model.loadMessages(modelContext: context)
+
+        let wire = HermesOfflineWire(rows: [row(1, "user", "Hi"), row(2, "assistant", "Hello."), row(3, "user", "Sent from Desktop")])
+        wire.replayFailure = BotFailure.transport
+        let chat = makeChat(wire)
+        await chat.model.loadMessages(modelContext: context)
+        XCTAssertTrue(chat.model.isViewingCachedData)
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello."])
+
+        wire.replayFailure = nil
+        chat.reconnect.open()
+        await waitUntil("reattached") { !chat.model.isViewingCachedData }
+
+        XCTAssertEqual(chat.model.messages.map(\.content), ["Hi", "Hello.", "Sent from Desktop"])
     }
 
     /// The exchange an undo removed, here on another client, leaves the cached transcript at the
@@ -253,12 +302,14 @@ import XCTest
 }
 
 /// A Hermes host for one idle session, `tip` in `default`: its attach calls and its newest
-/// transcript page. `connectFailure` stands for a host it can't reach, or one that refuses.
+/// transcript page. `connectFailure` stands for a host it can't reach, or one that refuses;
+/// `replayFailure` for a socket lost once the host named the runtime.
 @MainActor private final class HermesOfflineWire: BotTransport {
     var replayEpoch: String? = "epoch"
     var onEvent: ((BotJSON) -> Void)?
     var onDisconnect: ((Error) -> Void)?
     var connectFailure: Error?
+    var replayFailure: Error?
     var rows: [BotJSON]
     private(set) var methods: [String] = []
 
@@ -277,7 +328,9 @@ import XCTest
         case "session.resume":
             return .object(["session_id": .string("runtime"), "session_key": .string("tip"), "running": .bool(false),
                             "messages": .array([]), "info": .object(["profile_name": .string("default")])])
-        case "session.events.since": return BotFixtureWire.replay(latest: 0)
+        case "session.events.since":
+            if let replayFailure { throw replayFailure }
+            return BotFixtureWire.replay(latest: 0)
         default: throw BotFailure.unsupported
         }
     }

@@ -200,8 +200,9 @@ final class SessionListViewModel {
     /// Each content match's snippet, its `>>>`/`<<<` marks and all, by row identity.
     private var hermesSearchSnippets: [String: String] = [:]
     /// A Hermes search that ran before the list's socket was attached, as one a list opened
-    /// searching starts, or one whose matches went stale when the socket closed or the user
-    /// pulled to refresh; the list's next connect or refresh runs it.
+    /// searching starts or one run while it showed cached rows, or one whose matches went stale
+    /// when the socket closed or the user pulled to refresh; the list's next connect or refresh
+    /// runs it.
     @ObservationIgnored private var hermesSearchAwaitsConnect = false
     /// The offline cache the list's pages are written to and read back from while its host
     /// can't be reached (#1054), from the screen's `openHermes(modelContext:)`.
@@ -558,6 +559,8 @@ final class SessionListViewModel {
 
         guard !query.isEmpty, !isViewingCachedData else {
             isSearchingRemoteSessions = false
+            // A Hermes list showing cached rows asks the host once a read replaces them.
+            if hermes != nil, !query.isEmpty { hermesSearchAwaitsConnect = true }
             return
         }
 
