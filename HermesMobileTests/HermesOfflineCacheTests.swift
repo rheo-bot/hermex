@@ -92,6 +92,32 @@ import XCTest
         XCTAssertEqual(wire.searches.map(\.query), ["nimbus"])
     }
 
+    /// A refresh that falls back to cached rows while a search is active drops the host's
+    /// matches, since search reads only cached rows then, and searches the host again once a read
+    /// succeeds.
+    func testARefreshThatFallsBackToTheCacheDropsTheHostsMatchesUntilItSearchesAgain() async throws {
+        let context = try makeContext()
+        let rows = [HermesSessionRow(id: "plan", title: "Nimbus plan", lastActive: 20)]
+        let wire = HermesSessionListWire()
+        wire.pages["default"] = [0: HermesSessionPage(rows: rows)]
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "old", title: "Old chat", profile: "default"))]
+        let list = makeList(wire)
+        await list.openHermes(modelContext: context)
+        await list.searchSessions(query: "nimbus", debounceNanoseconds: 0)
+        XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["plan", "old"])
+
+        wire.pageFailure = .rejected(502)
+        await list.refreshHermes()
+        XCTAssertTrue(list.isViewingCachedData)
+        XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["plan"])
+
+        wire.searchResults = [HermesSessionSearchResult(row: HermesSessionRow(id: "newer", title: "Newer chat", profile: "default"))]
+        await list.refreshHermes()
+
+        XCTAssertFalse(list.isViewingCachedData)
+        XCTAssertEqual(list.visibleSessions(searchText: "nimbus", selectedProjectID: nil).compactMap(\.sessionId), ["plan", "newer"])
+    }
+
     /// With nothing cached, a list whose proxy answers for a host that isn't there says so in the
     /// connection's own words, not a webui server's unreachable copy.
     func testAnUnreachableHostWithNothingCachedKeepsItsAdvice() async throws {

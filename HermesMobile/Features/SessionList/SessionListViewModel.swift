@@ -1868,6 +1868,7 @@ final class SessionListViewModel {
             if isLoadingMoreSessions { isLoadingMoreSessions = false }
             startHermesStatusRead(wire)
             await readHermesProjects(wire, readSerial: serial)
+            await runAwaitedHermesSearch()
         } catch {
             guard serial == hermesReadSerial, hermesWire === wire, !Task.isCancelled else { return }
             // The client left the socket without a word (a call its screen cancelled): reconnect.
@@ -1909,8 +1910,9 @@ final class SessionListViewModel {
     }
 
     /// A list read that failed because the host can't be reached shows the Profile's cached
-    /// rows instead, read-only (`isViewingCachedData`), until a read succeeds. False when it
-    /// can't: another failure, or nothing cached.
+    /// rows instead, read-only (`isViewingCachedData`), until a read succeeds. Search then reads
+    /// only them, so the host's matches go, and the active search asks the host again once a
+    /// read succeeds. False when it can't: another failure, or nothing cached.
     @discardableResult
     private func showCachedHermesSessions(after error: Error) -> Bool {
         guard CacheFallbackPolicy.shouldUseCache(for: error), let hermesCache, let profile = hermesProfile else { return false }
@@ -1927,6 +1929,8 @@ final class SessionListViewModel {
         isViewingCachedData = true
         errorMessage = nil; sessionLoadError = nil
         setHermesStates([:])
+        clearHermesSearchMatches()
+        if activeRemoteSearchQuery?.isEmpty == false { hermesSearchAwaitsConnect = true }
         return true
     }
 
