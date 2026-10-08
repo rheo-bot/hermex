@@ -191,6 +191,9 @@ final class SessionListViewModel {
     /// The host's matches for the active search on a Hermes list (#1053), in its order, as it
     /// answered but for the deletes, archives, restores and renames this phone made since.
     @ObservationIgnored private var hermesSearchResults: [HermesSessionRow] = []
+    /// Bumped by each write the host confirmed, so a search out meanwhile, whose answer may
+    /// predate it, asks again rather than undo it on the matches.
+    @ObservationIgnored private var hermesSearchWrites = 0
     /// `hermesSearchResults` as rows built from the results' own fields; a loaded row shows in
     /// its place.
     private var hermesSearchRows: [SessionSummary] = []
@@ -2053,15 +2056,20 @@ final class SessionListViewModel {
     // MARK: Hermes search (#1053)
 
     /// One search of the listed Profile for `query`, applied unless a newer search, a Profile
-    /// switch or a new client replaced it meanwhile. False when it was replaced.
+    /// switch or a new client replaced it meanwhile. A write the host confirmed while it was out
+    /// may postdate its answer, so it asks again. False when it was replaced.
     private func searchHermes(_ query: String) async throws -> Bool {
         guard let wire = hermesWire, let profile = hermesProfile else { throw BotFailure.stale }
-        let results = try await wire.searchSessions(query: query, profile: profile)
-        guard !Task.isCancelled, activeRemoteSearchQuery == query, hermesWire === wire, hermesProfile == profile else { return false }
-        hermesSearchSnippets = Dictionary(results.compactMap { result in result.snippet.map { (result.row.identity, $0) } },
-                                          uniquingKeysWith: { first, _ in first })
-        showHermesSearch(results.map(\.row), in: profile)
-        return true
+        while true {
+            let writes = hermesSearchWrites
+            let results = try await wire.searchSessions(query: query, profile: profile)
+            guard !Task.isCancelled, activeRemoteSearchQuery == query, hermesWire === wire, hermesProfile == profile else { return false }
+            guard writes == hermesSearchWrites else { continue }
+            hermesSearchSnippets = Dictionary(results.compactMap { result in result.snippet.map { (result.row.identity, $0) } },
+                                              uniquingKeysWith: { first, _ in first })
+            showHermesSearch(results.map(\.row), in: profile)
+            return true
+        }
     }
 
     /// Shows `results` as the search's matches, each in the project lane that now claims it, so
@@ -2075,6 +2083,7 @@ final class SessionListViewModel {
     /// Shows a write the host confirmed on the search's matches, which only a new search reads
     /// again: a delete (`nil`) drops the match, and a pin, archive, restore or rename shows on it.
     private func applyToHermesSearch(_ change: HermesSessionChange?, key: String) {
+        hermesSearchWrites += 1
         guard let profile = hermesProfile, let index = hermesSearchResults.firstIndex(where: { $0.id == key }) else { return }
         var results = hermesSearchResults
         switch change {

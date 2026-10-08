@@ -629,6 +629,30 @@ import Observation
         await other.value
     }
 
+    /// A delete confirmed while the same search runs again may postdate the host's answer, so
+    /// that answer is dropped and the host asked again: the deleted match stays gone.
+    func testAWriteConfirmedDuringARepeatedSearchIsNotUndoneByItsAnswer() async throws {
+        let wire = HermesSessionListWire()
+        wire.searchResults = ["gone", "kept"].map { HermesSessionSearchResult(row: HermesSessionRow(id: $0, title: "Old \($0)", profile: "default")) }
+        let list = makeList(wire)
+        await list.openHermes()
+        await list.searchSessions(query: "old", debounceNanoseconds: 0)
+        let gone = try XCTUnwrap(list.visibleSessions(searchText: "old", selectedProjectID: nil).first)
+
+        wire.holdsSearch = true
+        let again = Task { await list.searchSessions(query: "old", debounceNanoseconds: 0) }
+        await waitUntil("search parked") { wire.searches.count == 2 }
+        let deleted = await list.delete(gone)
+        wire.searchResults.removeFirst()
+        wire.holdsSearch = false
+        wire.release()
+        await again.value
+
+        XCTAssertTrue(deleted)
+        XCTAssertEqual(list.visibleSessions(searchText: "old", selectedProjectID: nil).compactMap(\.sessionId), ["kept"])
+        XCTAssertEqual(wire.searches.count, 3)
+    }
+
     /// A search the list moved off its Profile from never applies there.
     func testASearchAnotherProfileReplacedIsDropped() async {
         let wire = HermesSessionListWire()
